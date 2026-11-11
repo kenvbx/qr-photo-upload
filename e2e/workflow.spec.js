@@ -480,7 +480,7 @@ test('real queue worker generates private bounded thumbnails while originals rem
  await page.reload();
  const card = page.locator('.photo-card').first();
  const thumbnailUrl = await card.locator('img').getAttribute('src');
- expect(thumbnailUrl).toMatch(/\/photos\/\d+\/thumbnail$/);
+ expect(new URL(thumbnailUrl).pathname).toMatch(/\/photos\/\d+\/thumbnail$/);
  await expect.poll(async () => {
   const response = await page.request.get(thumbnailUrl);
   return response.headers()['content-type'];
@@ -534,4 +534,90 @@ test('queued ZIP page shows processing and reconnects after status polling fails
  expect((await downloadEvent).suggestedFilename()).toMatch(/selected\.zip$/);
  await page.getByRole('link', { name: 'Back to gallery' }).click();
  await expect(page.getByRole('region', { name: 'Recent ZIP requests' })).toBeVisible();
+});
+
+
+test('gallery receives new photos live, preserves selection and keeps the viewer open', async ({ page, browser }) => {
+ const errors = []; page.on('pageerror', error => errors.push(error.message));
+ const url = await createPreviewCollection(page, 'Live gallery');
+ const context = await browser.newContext(); const guest = await context.newPage(); await guest.goto(url);
+ await guest.locator('input[type=file]').setInputFiles(previewImage('live-first.png'));
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(1, { timeout: 15000 });
+ await page.locator('input[name="photos[]"]').check();
+ await guest.locator('input[type=file]').setInputFiles(previewImage('live-second.png', [200, 110, 20]));
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(2, { timeout: 15000 });
+ await expect(page.locator('input[name="photos[]"]:checked')).toHaveCount(1);
+ await page.locator('[data-lightbox-photo]').first().click();
+ await guest.locator('input[type=file]').setInputFiles(previewImage('live-third.png', [30, 50, 90]));
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.locator('.upload-status')).toContainText('Thank you');
+ await expect(page.locator('dialog')).toBeVisible();
+ await page.getByRole('button', { name: 'Close photo viewer' }).click();
+ await page.getByRole('heading', { name: 'Live gallery', exact: true }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(3, { timeout: 15000 });
+ await page.getByLabel('Search name or photo ID').fill('live-second');
+ await page.getByRole('button', { name: 'Apply filters' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(1);
+ await expect(page.locator('.photo-filename')).toHaveText('live-second.png');
+ await page.setViewportSize({ width: 390, height: 844 });
+ await page.getByRole('link', { name: 'Tasks', exact: true }).click();
+ await expect(page.getByRole('heading', { name: 'Background tasks' })).toBeVisible();
+ expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+ await page.screenshot({ path: 'screenshots/tasks-mobile.png', fullPage: true });
+ expect(errors).toEqual([]); await context.close();
+});
+
+test('optional compression resizes a photo and retries the exact same encoded bytes', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Compressed memories');
+ const collectionUrl = page.url();
+ const context = await browser.newContext(); const guest = await context.newPage(); await guest.goto(url);
+ const image = new PNG({ width: 2400, height: 1200 });
+ let seed = 12345;
+ for (let i = 0; i < image.data.length; i += 4) {
+  seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+  image.data[i] = seed & 255; image.data[i+1] = (seed >>> 8) & 255; image.data[i+2] = (seed >>> 16) & 255; image.data[i+3] = 255;
+ }
+ const original = PNG.sync.write(image);
+ await guest.locator('input[type=file]').setInputFiles({ name: 'large.png', mimeType: 'image/png', buffer: original });
+ await guest.locator('[data-compress]').check();
+ const attempts = [];
+ await guest.route('**/u/*', async route => {
+  if (route.request().method() !== 'POST') { await route.continue(); return; }
+  const data = route.request().postDataBuffer();
+  // Multipart boundaries can change, but the encoded JPEG must stay identical.
+  const begin = data.indexOf(Buffer.from([0xff, 0xd8, 0xff]));
+  const end = data.lastIndexOf(Buffer.from([0xff, 0xd9]));
+  expect(begin).toBeGreaterThan(0); attempts.push(data.subarray(begin, end + 2));
+  if (attempts.length === 1) await route.fulfill({ status: 503, contentType: 'application/json', body: '{}' });
+  else await route.continue();
+ });
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.locator('.upload-status')).toContainText('Thank you', { timeout: 15000 });
+ expect(attempts).toHaveLength(2); expect(attempts[0].equals(attempts[1])).toBe(true);
+ expect(attempts[0].length).toBeLessThan(original.length);
+ await expect(guest.locator('.photo-upload-state')).toContainText('reduced');
+ await expect(guest.locator('[data-compress]')).toBeDisabled();
+ await page.goto(collectionUrl);
+ await expect(page.locator('.photo-info')).toContainText('2048 × 1024');
+ const response = await page.request.get(await page.locator('[data-lightbox-photo]').getAttribute('href'));
+ expect((await response.body()).equals(attempts[0])).toBe(true);
+ await context.close();
+});
+
+test('organizer can protect QR upload with a password and revoke guest access', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Protected event');
+ await page.getByLabel('Set upload password').fill('shared-secret-123');
+ await page.getByRole('button', { name: 'Save settings' }).click();
+ const context = await browser.newContext(); const guest = await context.newPage(); await guest.goto(url);
+ await expect(guest.getByRole('heading', { name: 'Private upload link' })).toBeVisible();
+ await guest.getByLabel('Upload password').fill('shared-secret-123');
+ await guest.getByRole('button', { name: 'Unlock upload link' }).click();
+ await expect(guest.getByRole('heading', { name: 'Protected event' })).toBeVisible();
+ await page.getByLabel('Change upload password').fill('replacement-secret');
+ await page.getByRole('button', { name: 'Save settings' }).click();
+ await guest.reload();
+ await expect(guest.getByRole('heading', { name: 'Private upload link' })).toBeVisible();
+ await context.close();
 });

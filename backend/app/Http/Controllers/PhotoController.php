@@ -12,7 +12,7 @@ class PhotoController extends Controller
     public function thumbnail(Request $request, Photo $photo)
     {
         abort_unless($photo->uploadSession->user_id === $request->user()->id, 404);
-        $disk = Storage::disk('local');
+        $disk = Storage::disk($photo->disk);
         $headers = ['Content-Type' => 'image/jpeg', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store'];
         if ($photo->thumbnail_status === 'ready' && $disk->exists($photo->thumbnailFile())) {
             return $disk->response($photo->thumbnailFile(), null, $headers);
@@ -24,7 +24,7 @@ class PhotoController extends Controller
     public function show(Request $r, Photo $photo)
     {
         abort_unless($photo->uploadSession->user_id === $r->user()->id, 404);
-        $disk = Storage::disk('local');
+        $disk = Storage::disk($photo->disk);
         abort_unless($disk->exists($photo->path), 404);
         $headers = ['Content-Type' => $photo->mime, 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store'];
         if ($r->boolean('download')) {

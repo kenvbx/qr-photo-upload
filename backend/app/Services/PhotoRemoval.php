@@ -15,7 +15,7 @@ class PhotoRemoval
             if (! $locked) {
                 return false;
             }
-            $disk = Storage::disk('local');
+            $disk = Storage::disk($locked->disk);
             foreach ([$locked->thumbnailFile(), $locked->thumbnailFile().'.tmp'] as $derivative) {
                 if ($disk->exists($derivative) && ! $disk->delete($derivative)) {
                     return false;

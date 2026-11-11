@@ -27,3 +27,14 @@ Malware scanning, retention/cleanup scheduling, monitoring alerts, resumable upl
 - Builds retry at most 3 attempts with 10/60-second exception backoff and a 60-second timeout. Incomplete archives are not downloadable; failed requests can be retried, and duplicate retry does not enqueue extra work while active/ready.
 - Missing/deleted sources never produce a partial success. Deleting a selected source revokes access to an already-built ZIP. Source and export locks serialize normal build/delete/prune/retry mutations.
 - Hourly scheduler definition plus exports:prune remove expired final/building files and metadata; storage cleanup failure preserves the record. Expiry blocks access even without scheduler execution, and late jobs cannot recreate pruned exports.
+
+
+## Collection upgrades delivered
+
+1. Visible owner gallery automatically receives uploads and thumbnail readiness without losing selected IDs or interrupting the lightbox; manual fallback works.
+2. Owner task dashboard shows thumbnail/ZIP states and exposes safe retry/repair actions, isolated from other owners.
+3. Optional client compression creates smaller bounded JPEGs, caches encoded bytes for retries and preserves originals when disabled/unsupported.
+4. Atomic original-byte quotas exclude duplicates; optional future-upload retention records fixed deadlines and scheduled cleanup preserves failed metadata.
+5. Hashed QR password gates guest views/upload/replay, limits attempts and invalidates grants after password changes.
+6. Owner search by filename/ID, MIME filtering and allowlisted date/size sorting preserve pagination/filter state.
+7. Private local/S3/R2 photo disks coexist, use authorized streamed access and support queued thumbnails/ZIPs/removal; provider secrets/configuration supplied later.

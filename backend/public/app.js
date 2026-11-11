@@ -1,7 +1,6 @@
-document.querySelectorAll('[data-confirm]').forEach(form => {
-  form.addEventListener('submit', event => {
-    if (!window.confirm(form.dataset.confirm)) event.preventDefault();
-  });
+document.addEventListener('submit', event => {
+  const form = event.target.closest('[data-confirm]');
+  if (form && !window.confirm(form.dataset.confirm)) event.preventDefault();
 });
 
 document.querySelectorAll('[data-copy]').forEach(button => {
@@ -32,6 +31,7 @@ if (photoInput) {
   const totalProgress = form.querySelector('#upload-progress');
   const totalLabel = form.querySelector('.upload-total-label');
   const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+  const compression = form.querySelector('[data-compress]');
   const enhanced = typeof XMLHttpRequest !== 'undefined' && Boolean(globalThis.crypto?.getRandomValues);
   let items = [];
   let previewUrls = [];
@@ -80,6 +80,7 @@ if (photoInput) {
 
   function updateControls() {
     photoInput.disabled = busy;
+    if (compression) compression.disabled = busy || items.some(item => item.uploadFile);
     selection.querySelector('.preview-heading .muted').textContent = busy ? 'Keep this page open' : (items.some(item => item.state !== 'ready') ? 'Uploads tracked below' : 'Not uploaded yet');
     selection.querySelector('.selection-help').textContent = busy ? 'Your selection is locked while uploads are running.'
       : (items.length && items.every(confirmed) ? 'All photos confirmed. Choose more files above to start a new selection.' : "Remove any photos you don't want to share. Choosing files again replaces this selection.");
@@ -211,6 +212,30 @@ if (photoInput) {
     updateControls();
   }
 
+  async function preparePhoto(item) {
+    if (item.uploadFile) return;
+    item.uploadFile = item.file;
+    if (!compression?.checked || typeof createImageBitmap !== 'function') return;
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(item.file);
+      if (bitmap.width > 12000 || bitmap.height > 12000 || bitmap.width * bitmap.height > 20000000) return;
+      const scale = Math.min(1, 2048 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.82));
+      if (blob && blob.size < item.file.size) {
+        item.uploadFile = new File([blob], item.file.name.replace(/\.[^.]+$/, '') + '.jpg', { type: 'image/jpeg' });
+        item.savings = ` · reduced ${Math.round((1 - blob.size / item.file.size) * 100)}%`;
+      }
+    } catch { /* The original remains available if compression is unsupported. */ }
+    finally { bitmap?.close(); }
+  }
+
   function sendPhoto(item) {
     return new Promise(resolve => {
       const xhr = new XMLHttpRequest();
@@ -260,7 +285,7 @@ if (photoInput) {
       });
       const body = new FormData();
       body.append('upload_key', item.key);
-      body.append('photos[]', item.file, item.file.name);
+      body.append('photos[]', item.uploadFile || item.file, (item.uploadFile || item.file).name);
       try { xhr.send(body); } catch { uncertain(); }
     });
   }
@@ -275,6 +300,7 @@ if (photoInput) {
     try {
       for (let index = 0; index < queue.length; index++) {
         const item = queue[index];
+        await preparePhoto(item);
         item.state = 'uploading';
         item.retryAt = 0;
         let response;
@@ -296,6 +322,7 @@ if (photoInput) {
           item.retryAt = response.retryAt || 0;
           item.message = response.message;
         }
+        if (response.ok && item.savings) item.message += item.savings;
         updateProgress(item);
         if (response.stop) {
           queue.slice(index + 1).forEach(remaining => {
@@ -334,8 +361,7 @@ if (photoInput) {
   });
 }
 
-const gallery = document.querySelector('[data-gallery]');
-if (gallery) {
+function initializeGallery(gallery) {
   const form = gallery.querySelector('#photo-selection');
   const checks = [...gallery.querySelectorAll('input[name="photos[]"]')];
   const selectAll = gallery.querySelector('[data-select-all]');
@@ -374,7 +400,7 @@ if (gallery) {
         event.preventDefault();
       }
     });
-    window.addEventListener('pageshow', updateSelection);
+    // Selection listeners belong to this mounted gallery only.
     updateSelection();
   }
 
@@ -458,6 +484,55 @@ if (gallery) {
       }
     });
   }
+}
+
+const gallery = document.querySelector('[data-gallery]');
+if (gallery) initializeGallery(gallery);
+
+const liveContent = document.querySelector('[data-live-content]');
+if (liveContent) {
+  let revision;
+  let timer;
+  let stopped = false;
+  async function refreshLiveContent() {
+    if (stopped) return;
+    if (!document.hidden && !liveContent.querySelector('dialog[open]')) {
+      try {
+        const response = await fetch(liveContent.dataset.liveUrl, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        if (!response.ok) throw new Error('Refresh unavailable');
+        const data = await response.json();
+        if (typeof data.html !== 'string' || typeof data.revision !== 'string') throw new Error('Invalid response');
+        const focused = document.activeElement;
+        const card = focused.closest('[data-photo-id]');
+        const cardId = card?.dataset.photoId;
+        const controlIndex = card ? [...card.querySelectorAll('a,button,input')].indexOf(focused) : -1;
+        const toolbarKey = ['data-select-all', 'data-clear-selection'].find(key => focused.hasAttribute(key));
+        const canRestore = !liveContent.contains(focused) || (cardId && controlIndex >= 0) || toolbarKey;
+        if (data.revision !== revision && canRestore && !liveContent.querySelector('dialog[open]')) {
+          const selected = new Set([...liveContent.querySelectorAll('input[name="photos[]"]:checked')].map(input => input.value));
+          liveContent.innerHTML = data.html;
+          liveContent.querySelectorAll('input[name="photos[]"]').forEach(input => { input.checked = selected.has(input.value); });
+          if (liveContent.hasAttribute('data-gallery')) initializeGallery(liveContent);
+          if (cardId && controlIndex >= 0) {
+            const replacement = liveContent.querySelector(`[data-photo-id="${CSS.escape(cardId)}"]`);
+            replacement?.querySelectorAll('a,button,input')[controlIndex]?.focus({ preventScroll: true });
+          } else if (toolbarKey) liveContent.querySelector(`[${toolbarKey}]`)?.focus({ preventScroll: true });
+          revision = data.revision;
+        }
+        const count = document.querySelector('[data-photo-count]');
+        if (count && Number.isInteger(data.photo_count)) count.textContent = data.photo_count;
+        const usage = document.querySelector('[data-storage-usage]');
+        if (usage && data.usage) usage.textContent = data.usage;
+        document.querySelector('[data-live-status]').textContent = 'Up to date · updates automatically.';
+      } catch {
+        document.querySelector('[data-live-status]').textContent = 'Unable to refresh. Reconnecting; you can also refresh this page.';
+      }
+    }
+    if (!stopped) timer = setTimeout(refreshLiveContent, 5000);
+  }
+  window.addEventListener('pagehide', () => { stopped = true; clearTimeout(timer); });
+  window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; refreshLiveContent(); } });
+  timer = setTimeout(refreshLiveContent, 3000);
 }
 
 const exportPanel = document.querySelector('[data-export]');

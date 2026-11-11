@@ -10,6 +10,11 @@ class Photo extends Model
 {
     protected $guarded = ['id'];
 
+    protected function casts(): array
+    {
+        return ['delete_after' => 'datetime'];
+    }
+
     public function thumbnailFile(): string
     {
         return 'thumbnails/'.$this->upload_session_id.'/'.$this->id.'.jpg';

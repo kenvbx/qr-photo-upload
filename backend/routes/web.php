@@ -6,6 +6,7 @@ use App\Http\Controllers\GuestUploadController;
 use App\Http\Controllers\PhotoController;
 use App\Http\Controllers\PhotoExportController;
 use App\Http\Controllers\PhotoSelectionController;
+use App\Http\Controllers\TaskController;
 use Illuminate\Support\Facades\Route;
 
 Route::middleware('guest')->group(function () {
@@ -13,6 +14,9 @@ Route::middleware('guest')->group(function () {
     Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:login');
 });
 Route::middleware('auth')->group(function () {
+    Route::get('/tasks', [TaskController::class, 'index'])->name('tasks.index');
+    Route::post('/photos/{photo}/retry', [TaskController::class, 'retry'])->middleware('throttle:photo-selection')->name('photos.retry');
+    Route::post('/collections/{collection}/settings', [CollectionController::class, 'update'])->name('collections.update');
     Route::get('/', [CollectionController::class, 'index'])->name('dashboard');
     Route::post('/logout', [AuthController::class, 'logout'])->name('logout');
     Route::post('/collections', [CollectionController::class, 'store'])->middleware('throttle:collection-create')->name('collections.store');
@@ -28,3 +32,5 @@ Route::middleware('auth')->group(function () {
 });
 Route::get('/u/{token}', [GuestUploadController::class, 'show'])->where('token', '[a-f0-9]{64}')->middleware('throttle:guest-view')->name('upload');
 Route::post('/u/{token}', [GuestUploadController::class, 'store'])->where('token', '[a-f0-9]{64}')->middleware('throttle:guest-upload')->name('upload.store');
+
+Route::post('/u/{token}/unlock', [GuestUploadController::class, 'unlock'])->where('token', '[a-f0-9]{64}')->middleware('throttle:5,1')->name('upload.unlock');

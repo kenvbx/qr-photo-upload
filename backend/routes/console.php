@@ -45,3 +45,5 @@ Artisan::command('demo:seed', function () {
 })->purpose('Create a disposable local-only demo organizer');
 
 Schedule::command('exports:prune')->hourly()->withoutOverlapping();
+
+Schedule::command('photos:prune')->hourly()->withoutOverlapping();

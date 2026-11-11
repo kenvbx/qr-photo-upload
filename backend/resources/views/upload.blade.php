@@ -2,6 +2,7 @@
 @section('title','Add your photos')
 @section('content')
 <div class="guest-wrap"><span class="eyebrow">YOU WERE THERE. SHARE YOUR VIEW.</span><h1>{{ $collection->title }}</h1><p class="lead">The best moments look different through every lens.</p><section class="panel upload-panel"><h2>Add your photos</h2><p class="muted">No sign-up needed. Just choose your favorites.</p><form method="post" enctype="multipart/form-data" action="{{ route('upload.store',$collection->token) }}" data-upload>@csrf<input type="hidden" name="upload_key" value="{{ \Illuminate\Support\Str::uuid() }}"><label class="upload-zone" for="photos"><span class="upload-symbol" aria-hidden="true">↑</span><strong>Choose photos to share</strong><span>Tap to browse your photo library</span><input id="photos" type="file" name="photos[]" accept="image/jpeg,image/png,image/webp" multiple required aria-describedby="upload-limits file-info"></label><p class="hint" id="upload-limits">JPEG, PNG or WebP · Up to 10 MB each · 10 photos at a time</p>
+<label class="checkbox-label"><input type="checkbox" data-compress> Reduce upload size (up to 2048 px, JPEG). Leave off to preserve originals.</label><noscript><p class="hint">Compression requires JavaScript. Original files will be uploaded.</p></noscript>
 <section class="upload-selection" aria-labelledby="preview-heading" hidden>
 <div class="preview-heading"><h3 id="preview-heading">Your selected photos</h3><span class="muted">Not uploaded yet</span></div>
 <ul class="upload-previews" aria-label="Selected photos"></ul>

@@ -9,7 +9,7 @@ class UploadSession extends Model
 {
     protected $guarded = ['id'];
 
-    protected $hidden = ['token'];
+    protected $hidden = ['token', 'password_hash'];
 
     protected function casts(): array
     {

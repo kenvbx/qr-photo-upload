@@ -29,7 +29,7 @@ class QueuePhotoThumbnails extends Command
                     DB::transaction(function () use ($photo, &$queued) {
                         $locked = Photo::lockForMutation($photo->id);
                         if (! $locked || ($locked->thumbnail_status === 'failed' && ! $this->option('retry-failed'))
-                            || ($locked->thumbnail_status === 'ready' && Storage::disk('local')->exists($locked->thumbnailFile()))) {
+                            || ($locked->thumbnail_status === 'ready' && Storage::disk($locked->disk)->exists($locked->thumbnailFile()))) {
                             return;
                         }
                         $locked->update(['thumbnail_status' => 'pending']);

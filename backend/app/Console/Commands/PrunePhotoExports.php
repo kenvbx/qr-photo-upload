@@ -27,6 +27,9 @@ class PrunePhotoExports extends Command
                     if (! Storage::disk('local')->delete([$locked->archiveFile(), $locked->temporaryFile()])) {
                         throw new RuntimeException('Unable to remove expired ZIP files.');
                     }
+                    if (! Storage::disk('local')->deleteDirectory('exports/'.$locked->id.'.sources')) {
+                        throw new RuntimeException('Unable to remove expired ZIP staging files.');
+                    }
                     $locked->delete();
                     $removed++;
                 });

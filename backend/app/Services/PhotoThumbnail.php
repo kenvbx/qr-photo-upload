@@ -18,7 +18,7 @@ class PhotoThumbnail
             if (! $photo) {
                 return;
             }
-            $disk = Storage::disk('local');
+            $disk = Storage::disk($photo->disk);
             $path = $photo->thumbnailFile();
             $temporary = $path.'.tmp';
             if ($photo->thumbnail_status === 'ready' && $disk->exists($path)) {
@@ -43,7 +43,14 @@ class PhotoThumbnail
                     throw new RuntimeException('Thumbnail source could not be decoded.');
                 }
                 if ($dimensions['mime'] === 'image/jpeg' && function_exists('exif_read_data')) {
-                    $exif = @exif_read_data($disk->path($photo->path), 'IFD0');
+                    $exifStream = fopen('php://temp', 'w+b');
+                    try {
+                        fwrite($exifStream, $bytes);
+                        rewind($exifStream);
+                        $exif = @exif_read_data($exifStream, 'IFD0');
+                    } finally {
+                        fclose($exifStream);
+                    }
                     $source = $this->orient($source, (int) ($exif['Orientation'] ?? 1));
                 }
                 $scale = min(1, 480 / max(imagesx($source), imagesy($source)));

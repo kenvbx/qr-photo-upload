@@ -30,7 +30,7 @@ class PhotoExportBuilder
             $photos = $collection->photos()->whereIn('id', $ids)->orderBy('id')->lockForUpdate()->get();
             abort_unless($photos->count() === count($ids), 404, 'Some selected photos are no longer available.');
             foreach ($photos as $photo) {
-                if (! Storage::disk('local')->exists($photo->path)) {
+                if (! Storage::disk($photo->disk)->exists($photo->path)) {
                     throw ValidationException::withMessages(['photos' => 'A selected file is unavailable. Refresh the gallery and choose again.']);
                 }
             }
@@ -76,14 +76,41 @@ class PhotoExportBuilder
             chmod($disk->path('exports'), 0700);
             $previousMask = umask(0077);
             $published = false;
+            $sources = [];
+            $sourceDirectory = 'exports/'.$export->id.'.sources';
             try {
                 $disk->delete($export->temporaryFile());
+                $disk->deleteDirectory($sourceDirectory);
                 $archive = new PharData($disk->path($export->temporaryFile()), 0, null, Phar::ZIP);
                 foreach ($photos as $photo) {
-                    if (! $disk->exists($photo->path) || $disk->size($photo->path) > 10 * 1024 * 1024) {
+                    $sourceDisk = Storage::disk($photo->disk);
+                    if (! $sourceDisk->exists($photo->path) || $sourceDisk->size($photo->path) > 10 * 1024 * 1024) {
                         throw new RuntimeException('A selected source is unavailable.');
                     }
-                    $archive->addFile($disk->path($photo->path), 'photo-'.$photo->id.'.'.pathinfo($photo->path, PATHINFO_EXTENSION));
+                    if ($photo->disk === 'local') {
+                        $sourcePath = $disk->path($photo->path);
+                    } else {
+                        $disk->makeDirectory($sourceDirectory);
+                        $sourcePath = $disk->path($sourceDirectory.'/'.$photo->id);
+                        touch($sourcePath);
+                        chmod($sourcePath, 0600);
+                        $sources[] = $sourcePath;
+                        $stream = $sourceDisk->readStream($photo->path);
+                        if (! is_resource($stream)) {
+                            throw new RuntimeException('Unable to read source.');
+                        }
+                        $output = fopen($sourcePath, 'wb');
+                        try {
+                            $copied = stream_copy_to_stream($stream, $output, 10 * 1024 * 1024 + 1);
+                            if ($copied !== (int) $photo->bytes || $copied > 10 * 1024 * 1024) {
+                                throw new RuntimeException('Source size changed.');
+                            }
+                        } finally {
+                            fclose($stream);
+                            fclose($output);
+                        }
+                    }
+                    $archive->addFile($sourcePath, 'photo-'.$photo->id.'.'.pathinfo($photo->path, PATHINFO_EXTENSION));
                 }
                 unset($archive);
                 if (! $disk->move($export->temporaryFile(), $export->archiveFile())) {
@@ -98,6 +125,10 @@ class PhotoExportBuilder
                 }
                 throw $exception;
             } finally {
+                foreach ($sources as $source) {
+                    @unlink($source);
+                }
+                $disk->deleteDirectory($sourceDirectory);
                 umask($previousMask);
             }
         }, 1);

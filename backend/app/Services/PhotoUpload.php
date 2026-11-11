@@ -15,7 +15,7 @@ class PhotoUpload
     /** @param array<int, UploadedFile> $files
      * @return array{uploaded: int, duplicates: int, replayed: bool}
      */
-    public function store(UploadSession $session, array $files, ?string $uploadKey = null): array
+    public function store(UploadSession $session, array $files, ?string $uploadKey = null, ?string $passwordGrant = null): array
     {
         $entries = [];
         foreach ($files as $index => $file) {
@@ -23,12 +23,15 @@ class PhotoUpload
         }
         $fingerprint = hash('sha256', json_encode(array_column($entries, 'sha256'), JSON_THROW_ON_ERROR));
         $paths = [];
+        $disk = config('photos.disk');
+        abort_unless(in_array($disk, ['local', 's3', 'r2'], true), 503);
         try {
-            return DB::transaction(function () use ($session, $entries, $uploadKey, $fingerprint, &$paths) {
+            return DB::transaction(function () use ($session, $entries, $uploadKey, $fingerprint, $disk, $passwordGrant, &$paths) {
                 if (DB::getDriverName() === 'sqlite') {
                     DB::table('upload_sessions')->where('id', $session->id)->update(['id' => DB::raw('id')]);
                 }
                 $locked = UploadSession::query()->lockForUpdate()->findOrFail($session->id);
+                abort_unless(! $locked->password_hash || hash_equals($locked->password_hash, $passwordGrant ?? ''), 403, 'Unlock this upload link before sending photos.');
                 if ($uploadKey !== null) {
                     $receipt = DB::table('upload_receipts')->where('upload_session_id', $locked->id)->where('upload_key', $uploadKey)->first();
                     if ($receipt) {
@@ -50,13 +53,16 @@ class PhotoUpload
                 if ($locked->photos()->count() + count($new) > 100) {
                     throw ValidationException::withMessages(['photos' => 'This collection can hold up to 100 photos.']);
                 }
+                if ($locked->photos()->sum('bytes') + array_sum(array_map(fn ($entry) => $entry['file']->getSize(), $new)) > $locked->quota_bytes) {
+                    throw ValidationException::withMessages(['photos' => 'This collection has reached its storage quota.']);
+                }
                 foreach ($new as $entry) {
                     $path = 'photos/'.$locked->id.'/'.Str::uuid().'.'.$entry['extension'];
                     $paths[] = $path;
-                    if (! Storage::disk('local')->putFileAs(dirname($path), $entry['file'], basename($path))) {
+                    if (! Storage::disk($disk)->putFileAs(dirname($path), $entry['file'], basename($path))) {
                         throw new \RuntimeException('Photo storage failed.');
                     }
-                    $photo = $locked->photos()->create(['path' => $path, 'mime' => $entry['mime'], 'bytes' => $entry['file']->getSize(), 'width' => $entry['width'], 'height' => $entry['height'], 'sha256' => $entry['sha256']]);
+                    $photo = $locked->photos()->create(['disk' => $disk, 'original_name' => mb_substr(basename(str_replace('\\', '/', $entry['file']->getClientOriginalName())), 0, 255), 'delete_after' => $locked->retention_days ? now()->addDays($locked->retention_days) : null, 'path' => $path, 'mime' => $entry['mime'], 'bytes' => $entry['file']->getSize(), 'width' => $entry['width'], 'height' => $entry['height'], 'sha256' => $entry['sha256']]);
                     GeneratePhotoThumbnail::dispatch($photo->id);
                 }
                 $result = ['uploaded' => count($new), 'duplicates' => count($entries) - count($new), 'replayed' => false];
@@ -70,7 +76,13 @@ class PhotoUpload
                 return $result;
             }, 1);
         } catch (\Throwable $error) {
-            Storage::disk('local')->delete($paths);
+            if ($paths !== []) {
+                try {
+                    Storage::disk($disk)->delete($paths);
+                } catch (\Throwable $cleanupError) {
+                    report($cleanupError);
+                }
+            }
             throw $error;
         }
     }
@@ -100,7 +112,7 @@ class PhotoUpload
     private function hashLegacyPhotos(UploadSession $session): void
     {
         foreach ($session->photos()->whereNull('sha256')->get() as $photo) {
-            $stream = Storage::disk('local')->readStream($photo->path);
+            $stream = Storage::disk($photo->disk)->readStream($photo->path);
             if (! is_resource($stream)) {
                 continue;
             }

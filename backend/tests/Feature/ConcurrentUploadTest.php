@@ -47,6 +47,21 @@ class ConcurrentUploadTest extends TestCase
         $this->assertDatabaseCount('jobs', 1);
     }
 
+    public function test_mysql_parallel_uploads_cannot_exceed_byte_quota(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Requires an isolated MySQL test database.');
+        }
+        $collection = $this->collection();
+        $collection->update(['quota_bytes' => max(UploadedFile::fake()->image('a.png', 40, 30)->getSize(), UploadedFile::fake()->image('b.png', 41, 30)->getSize())]);
+        $results = $this->race($collection, [(string) Str::uuid(), (string) Str::uuid()], [40, 41]);
+        $this->assertSame(1, count(array_filter($results, fn (array $result) => ($result['uploaded'] ?? 0) === 1)));
+        $this->assertSame(1, count(array_filter($results, fn (array $result) => ($result['status'] ?? '') === 'rejected')));
+        $this->assertDatabaseCount('photos', 1);
+        $this->assertDatabaseCount('upload_receipts', 1);
+        $this->assertDatabaseCount('jobs', 1);
+    }
+
     public function test_mysql_thumbnail_generation_racing_deletion_cannot_leave_an_orphan_derivative(): void
     {
         if (DB::getDriverName() !== 'mysql') {

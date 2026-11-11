@@ -10,10 +10,11 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
+        "ext-gd": "*",
         "bacon/bacon-qr-code": "^3.0",
         "laravel/framework": "^13.17",
         "laravel/tinker": "^3.0",
-        "ext-gd": "*"
+        "league/flysystem-aws-s3-v3": "^3.0"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",
