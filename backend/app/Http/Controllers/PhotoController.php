@@ -34,6 +34,6 @@ class PhotoController extends Controller
             $locked->delete();
         });
 
-        return redirect()->route('collections.show', $photo->upload_session_id)->with('status','Photo deleted.');
+        return redirect()->route('collections.show', $photo->upload_session_id)->with('status', 'Photo deleted.');
     }
 }

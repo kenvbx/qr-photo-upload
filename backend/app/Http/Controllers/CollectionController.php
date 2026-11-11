@@ -53,6 +53,6 @@ class CollectionController extends Controller
             }
         });
 
-        return redirect()->route('collections.show', $collection)->with('status','Upload link closed. Your photos are still available.');
+        return redirect()->route('collections.show', $collection)->with('status', 'Upload link closed. Your photos are still available.');
     }
 }
