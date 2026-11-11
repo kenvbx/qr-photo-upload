@@ -1,0 +1,7 @@
+{
+  "name": "qr-photo-upload-demo",
+  "private": true,
+  "type": "module",
+  "scripts": { "test:e2e": "playwright test" },
+  "devDependencies": { "@playwright/test": "^1.56.0", "jsqr": "^1.4.0", "pngjs": "^7.0.0" }
+}

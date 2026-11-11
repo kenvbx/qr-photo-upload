@@ -1,0 +1,6 @@
+@extends('layout')
+@section('title','Organizer sign in')
+@section('content')
+<div class="login-grid"><section><span class="eyebrow">LESS SENDING. MORE SHARING.</span><h1>Every perspective.<br>One place.</h1><p class="lead">Bring everyone's photos together with a simple scan. No accounts for guests. No lost attachments.</p><div class="steps"><div><span>01</span>Create a collection</div><div><span>02</span>Share its QR code</div><div><span>03</span>Gather the memories</div></div></section>
+<section class="panel login-panel"><span class="eyebrow">YOUR WORKSPACE</span><h2>Welcome back</h2><p class="muted">Sign in to manage your photo collections.</p><form method="post" action="{{ url('/login') }}">@csrf<label for="email">Email address</label><input id="email" type="email" name="email" value="{{ old('email') }}" autocomplete="username" required><label for="password">Password</label><input id="password" type="password" name="password" autocomplete="current-password" required><button class="primary full" type="submit">Sign in to workspace <span aria-hidden="true">→</span></button></form><p class="hint">Organizer access only. Guests can upload through a collection link.</p></section></div>
+@endsection
