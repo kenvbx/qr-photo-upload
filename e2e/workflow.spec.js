@@ -316,3 +316,135 @@ test('native form fallback uploads with a receipt when JavaScript is disabled', 
  await expect(page.locator('.photo-card')).toHaveCount(1);
  await context.close();
 });
+
+async function galleryWithPhotos(page, browser, title) {
+ const url = await createPreviewCollection(page, title);
+ const collectionUrl = page.url();
+ const context = await browser.newContext();
+ const guest = await context.newPage();
+ await guest.goto(url);
+ await guest.locator('input[type=file]').setInputFiles([
+  previewImage('green.png'), previewImage('red.png', [190, 80, 60]), previewImage('blue.png', [64, 110, 170])
+ ]);
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: 'Thank you!' })).toBeVisible();
+ await context.close();
+ await page.reload();
+ await expect(page.locator('.photo-card')).toHaveCount(3);
+ return collectionUrl;
+}
+
+test('gallery lightbox navigates with keyboard, traps focus and syncs photo selection', async ({ page, browser }) => {
+ const errors = [];
+ page.on('pageerror', error => errors.push(error.message));
+ await galleryWithPhotos(page, browser, 'Lightbox memories');
+ const openers = page.locator('[data-lightbox-photo]');
+ const viewer = page.getByRole('dialog');
+ const firstTitle = await openers.first().getAttribute('data-title');
+ await openers.first().focus();
+ await page.keyboard.press('Enter');
+ await expect(viewer).toBeVisible();
+ await expect(viewer.getByRole('heading')).toHaveText(firstTitle);
+ await expect(viewer.locator('.lightbox-image')).toBeVisible();
+ await expect(viewer.getByRole('button', { name: 'Close photo viewer' })).toBeFocused();
+ for (let i = 0; i < 8; i++) {
+  await page.keyboard.press('Tab');
+  expect(await viewer.evaluate(element => element.contains(document.activeElement))).toBe(true);
+ }
+ await page.keyboard.press('ArrowLeft');
+ await expect(viewer.locator('.lightbox-counter')).toHaveText('3 of 3 on this page');
+ await page.keyboard.press('ArrowRight');
+ await expect(viewer.locator('.lightbox-counter')).toHaveText('1 of 3 on this page');
+ await viewer.getByRole('checkbox', { name: 'Select photo', exact: true }).check();
+ await page.keyboard.press('Escape');
+ await expect(viewer).not.toBeVisible();
+ await expect(openers.first()).toBeFocused();
+ await expect(page.locator('[data-selection-count]')).toHaveText('1 selected');
+ await expect(page.getByRole('checkbox', { name: 'Select this page' })).toHaveJSProperty('indeterminate', true);
+ await openers.first().click();
+ await expect(viewer.getByRole('checkbox', { name: 'Select photo', exact: true })).toBeChecked();
+ const downloadEvent = page.waitForEvent('download');
+ await viewer.getByRole('link', { name: 'Download', exact: true }).click();
+ expect((await downloadEvent).suggestedFilename()).toMatch(/^photo-\d+\.png$/);
+ await page.screenshot({ path: 'screenshots/gallery-lightbox-desktop.png' });
+ await viewer.getByRole('button', { name: 'Close photo viewer' }).click();
+ await expect(viewer).not.toBeVisible();
+ expect(errors).toEqual([]);
+});
+
+test('mobile gallery selects all, downloads ZIP and confirms only selected deletions', async ({ page, browser }) => {
+ await page.setViewportSize({ width: 375, height: 812 });
+ const collectionUrl = await galleryWithPhotos(page, browser, 'Selected memories');
+ const selectAll = page.getByRole('checkbox', { name: 'Select this page' });
+ await expect(page.getByRole('button', { name: 'Download ZIP' })).toBeDisabled();
+ await selectAll.check();
+ await expect(page.locator('[data-selection-count]')).toHaveText('3 selected');
+ await expect(page.locator('.photo-card.is-selected')).toHaveCount(3);
+ await page.getByRole('button', { name: 'Clear selection' }).click();
+ await expect(page.locator('[data-selection-count]')).toHaveText('0 selected');
+ await expect(selectAll).toBeFocused();
+ const checks = page.locator('input[name="photos[]"]');
+ await checks.nth(0).check();
+ await checks.nth(2).check();
+ const downloadEvent = page.waitForEvent('download');
+ await page.getByRole('button', { name: 'Download ZIP' }).click();
+ expect((await downloadEvent).suggestedFilename()).toMatch(/^collection-\d+-selected.zip$/);
+ expect(page.url()).toBe(collectionUrl);
+ await expect(page.locator('[data-selection-count]')).toHaveText('2 selected');
+ expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+ await page.screenshot({ path: 'screenshots/gallery-selection-mobile.png', fullPage: true });
+ await page.locator('[data-lightbox-photo]').first().click();
+ const viewer = page.getByRole('dialog');
+ await expect(viewer.locator('.lightbox-image')).toBeVisible();
+ expect(await viewer.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+ await page.screenshot({ path: 'screenshots/gallery-lightbox-mobile.png' });
+ await page.setViewportSize({ width: 812, height: 375 });
+ expect(await viewer.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+ await viewer.getByRole('button', { name: 'Close photo viewer' }).click();
+ await page.setViewportSize({ width: 375, height: 812 });
+ page.once('dialog', dialog => dialog.dismiss());
+ await page.getByRole('button', { name: 'Delete selected' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(3);
+ await expect(checks.nth(0)).toBeChecked();
+ page.once('dialog', async dialog => {
+  expect(dialog.message()).toContain('2 selected photos');
+  await dialog.accept();
+ });
+ await page.getByRole('button', { name: 'Delete selected' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(1);
+ await expect(page.getByRole('status').filter({ hasText: '2 photos deleted.' })).toBeVisible();
+ await expect(page.locator('[data-selection-count]')).toHaveText('0 selected');
+});
+
+test('lightbox reports failed images and a single photo remains usable; native gallery selection works', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'One photo');
+ const collectionUrl = page.url();
+ await page.goto(url);
+ await page.locator('input[type=file]').setInputFiles(previewImage('only.png'));
+ await page.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(page.getByRole('status').filter({ hasText: 'Thank you!' })).toBeVisible();
+ await page.goto(collectionUrl);
+ const opener = page.locator('[data-lightbox-photo]');
+ const imageUrl = await opener.getAttribute('href');
+ await page.route(`**${imageUrl}`, route => route.abort());
+ await opener.click();
+ const viewer = page.getByRole('dialog');
+ await expect(viewer.getByRole('status')).toContainText('could not be loaded');
+ await expect(viewer.getByRole('button', { name: 'Previous photo' })).toBeDisabled();
+ await expect(viewer.getByRole('button', { name: 'Next photo' })).toBeDisabled();
+ await viewer.getByRole('button', { name: 'Close photo viewer' }).click();
+ await page.unroute(`**${imageUrl}`);
+ await opener.click();
+ await expect(viewer.locator('.lightbox-image')).toBeVisible();
+ await page.keyboard.press('Escape');
+ const native = await browser.newContext({ javaScriptEnabled: false, storageState: await page.context().storageState() });
+ const nativePage = await native.newPage();
+ await nativePage.goto(collectionUrl);
+ await nativePage.locator('input[name="photos[]"]').check();
+ const downloadEvent = nativePage.waitForEvent('download');
+ await nativePage.getByRole('button', { name: 'Download ZIP' }).click();
+ expect((await downloadEvent).suggestedFilename()).toMatch(/selected\.zip$/);
+ await nativePage.getByRole('button', { name: 'Delete selected' }).click();
+ await expect(nativePage.getByRole('heading', { name: 'Ready for the first photo' })).toBeVisible();
+ await native.close();
+});

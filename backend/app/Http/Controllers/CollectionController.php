@@ -35,7 +35,7 @@ class CollectionController extends Controller
     public function show(Request $r, UploadSession $collection)
     {
         abort_unless($collection->user_id === $r->user()->id, 404);
-        $photos = $collection->photos()->latest()->paginate(24);
+        $photos = $collection->photos()->latest()->latest('id')->paginate(24);
         $url = rtrim(config('app.url'), '/').'/u/'.$collection->token;
         $qr = (new Writer(new ImageRenderer(new RendererStyle(260, 4), new SvgImageBackEnd)))->writeString($url);
 

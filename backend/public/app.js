@@ -333,3 +333,129 @@ if (photoInput) {
     if (event.persisted) renderPreviews();
   });
 }
+
+const gallery = document.querySelector('[data-gallery]');
+if (gallery) {
+  const form = gallery.querySelector('#photo-selection');
+  const checks = [...gallery.querySelectorAll('input[name="photos[]"]')];
+  const selectAll = gallery.querySelector('[data-select-all]');
+  const clear = gallery.querySelector('[data-clear-selection]');
+  const dialog = gallery.querySelector('.gallery-lightbox');
+  const links = [...gallery.querySelectorAll('[data-lightbox-photo]')];
+  let active = 0;
+  let opener;
+
+  function updateSelection() {
+    const count = checks.filter(check => check.checked).length;
+    gallery.querySelector('[data-selection-count]').textContent = `${count} selected`;
+    selectAll.checked = count === checks.length;
+    selectAll.indeterminate = count > 0 && count < checks.length;
+    clear.hidden = count === 0;
+    form.querySelectorAll('[data-bulk-action]').forEach(button => { button.disabled = count === 0; });
+    checks.forEach(check => { check.closest('.photo-card').classList.toggle('is-selected', check.checked); });
+    if (dialog) dialog.querySelector('[data-lightbox-select]').checked = checks[active].checked;
+  }
+
+  if (form) {
+    selectAll.closest('label').hidden = false;
+    checks.forEach(check => check.addEventListener('change', updateSelection));
+    selectAll.addEventListener('change', () => {
+      checks.forEach(check => { check.checked = selectAll.checked; });
+      updateSelection();
+    });
+    clear.addEventListener('click', () => {
+      checks.forEach(check => { check.checked = false; });
+      updateSelection();
+      selectAll.focus();
+    });
+    form.addEventListener('submit', event => {
+      const count = checks.filter(check => check.checked).length;
+      if (!count || (event.submitter?.value === 'delete' && !window.confirm(`Permanently delete ${count} selected photo${count === 1 ? '' : 's'}? This cannot be undone.`))) {
+        event.preventDefault();
+      }
+    });
+    window.addEventListener('pageshow', updateSelection);
+    updateSelection();
+  }
+
+  if (dialog && typeof dialog.showModal === 'function') {
+    const stage = dialog.querySelector('.lightbox-stage');
+    const state = dialog.querySelector('.lightbox-state');
+    let image = dialog.querySelector('.lightbox-image');
+    const previous = dialog.querySelector('[data-lightbox-previous]');
+    const next = dialog.querySelector('[data-lightbox-next]');
+    const selected = dialog.querySelector('[data-lightbox-select]');
+
+    function showPhoto(index) {
+      active = index;
+      const link = links[index];
+      dialog.querySelector('#lightbox-title').textContent = link.dataset.title;
+      dialog.querySelector('.lightbox-counter').textContent = `${index + 1} of ${links.length} on this page`;
+      dialog.querySelector('.lightbox-details').textContent = link.dataset.details;
+      dialog.querySelector('[data-lightbox-download]').href = link.dataset.download;
+      selected.checked = checks[index].checked;
+      previous.disabled = links.length < 2;
+      next.disabled = links.length < 2;
+      state.textContent = 'Loading photo…';
+      stage.setAttribute('aria-busy', 'true');
+      const freshImage = new Image();
+      freshImage.className = 'lightbox-image';
+      freshImage.alt = link.dataset.title;
+      freshImage.hidden = true;
+      freshImage.onload = () => {
+        if (image !== freshImage) return;
+        freshImage.hidden = false;
+        state.textContent = '';
+        stage.setAttribute('aria-busy', 'false');
+      };
+      freshImage.onerror = () => {
+        if (image !== freshImage) return;
+        state.textContent = 'This photo could not be loaded. Close and reopen to retry, or refresh the gallery.';
+        stage.setAttribute('aria-busy', 'false');
+      };
+      image.replaceWith(freshImage);
+      image = freshImage;
+      freshImage.src = link.href;
+    }
+    const move = delta => showPhoto((active + delta + links.length) % links.length);
+    links.forEach((link, index) => link.addEventListener('click', event => {
+      if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      opener = link;
+      showPhoto(index);
+      dialog.showModal();
+      document.body.classList.add('lightbox-open');
+    }));
+    previous.addEventListener('click', () => move(-1));
+    next.addEventListener('click', () => move(1));
+    selected.addEventListener('change', () => {
+      checks[active].checked = selected.checked;
+      updateSelection();
+    });
+    dialog.querySelector('[data-lightbox-close]').addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+    dialog.addEventListener('close', () => {
+      document.body.classList.remove('lightbox-open');
+      opener?.focus();
+    });
+    dialog.addEventListener('keydown', event => {
+      if (event.key === 'Tab') {
+        const focusable = [...dialog.querySelectorAll('button:not([disabled]), a[href], input:not([disabled])')]
+          .filter(element => element.getClientRects().length);
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault();
+        move(event.key === 'ArrowLeft' ? -1 : 1);
+      }
+    });
+  }
+}

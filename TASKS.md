@@ -9,10 +9,13 @@
 - [x] Verify MySQL concurrency with real parallel uploads in CI.
 - [ ] Deploy a demo when requested/configured.
 
-Verified 2026-11-11: 30 backend tests on MySQL (201 assertions), 28 on SQLite (188 assertions; 2 MySQL-only tests skipped), and 9 Chromium end-to-end tests. GitHub Actions run 43025004353 passed both jobs. Pending: physical phone, public demo deployment and operational restore drill.
+Verified locally 2026-11-11: 37 backend tests on SQLite (265 assertions; 2 MySQL-only tests skipped), and 12 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
 
 - [x] Guest photo previews, filename/size, keyboard-accessible removal, client validation feedback and browser regression coverage.
 
 - [x] Per-photo transfer/confirmation progress, bounded automatic retry and explicit retry of failed photos.
 - [x] Transactional upload receipts, key-conflict handling, SHA-256 content deduplication and native form compatibility.
 - [x] Add an isolated MySQL CI job and confirm real parallel-process replay/quota tests pass.
+
+- [x] Accessible gallery lightbox, keyboard navigation/focus, image loading/error recovery and mobile layout.
+- [x] Current-page photo selection, private original ZIP downloads, confirmed bulk deletion and authorization/failure regression coverage.

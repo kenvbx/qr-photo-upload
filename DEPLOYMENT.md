@@ -2,7 +2,7 @@
 
 ## Deploy checklist
 
-1. Provision one Laravel PHP 8.3+ instance (GD and PDO MySQL), MySQL 8+ and persistent private storage. Point web root exclusively to `backend/public`.
+1. Provision one Laravel PHP 8.3+ instance (GD, Phar and PDO MySQL), MySQL 8+ and persistent private storage. Point web root exclusively to `backend/public`.
 2. Run `composer install --no-dev --optimize-autoloader`. Configure `.env.production.example`, generate an application key once, and keep it stable across releases.
 3. Set `APP_URL` to the HTTPS origin, `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`; configure least-privilege DB credentials outside Git. Set private directory permissions for the PHP service account. Do not create a public storage symlink for photos.
 4. Set PHP `upload_max_filesize=10M`, `post_max_size=110M`, `max_file_uploads=10`, `memory_limit=256M` or higher; proxy body limit at least 110 MB and a suitable bounded upload timeout. Laravel validation still enforces limits.
@@ -27,3 +27,7 @@ For rollback, retain the previous code release and a pre-migration snapshot. Res
 Back up the database/private disk before `php artisan migrate --force`. This release adds unique photo content hashes and upload receipts without removing existing data. Readable old photos are hashed lazily during the next active upload; first-use latency may rise with the old collection size. Existing duplicate files are preserved. Do not prune receipts independently while a collection may still need retries: receipt retention is what prevents a completed request from resurrecting an admin-deleted photo. Native forms and JSON clients both support upload IDs; JSON clients require one. Do not log photo content or bearer URLs when diagnosing network failures.
 
 Smoke test real transfer progress, retry after loss of a response following commit, identical-byte duplicate selection, retry cooldown, expired CSRF, closure, and confirmation counts. Browser retries are per whole file and limited automatically; do not add proxy retries for non-idempotent uploads that omit an upload key. Keep retention/reconciliation and the separate private-file backup plan in place.
+
+## Gallery selection smoke check
+
+Open a private collection, browse the lightbox with keyboard and touch controls, select several photos, download the ZIP and compare original bytes. Cancel then confirm deletion, verify unselected photos remain and confirm another owner/guest cannot use selection endpoints. Test missing-file feedback and the native form without JavaScript. Keep OS temporary storage private and allow capacity for up to 240 MB of photo data per ZIP request; archives are deleted after normal sending or build errors. A process crash can leave `gather-*.zip` files in the PHP temp directory; establish an age-based cleanup policy before public use. Selection actions have a separate 20 requests/owner/minute rate limit.

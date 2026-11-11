@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Models\Photo;
+use App\Services\PhotoRemoval;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
 class PhotoController extends Controller
@@ -22,17 +22,10 @@ class PhotoController extends Controller
         return $disk->response($photo->path, null, $headers);
     }
 
-    public function destroy(Request $r, Photo $photo)
+    public function destroy(Request $r, Photo $photo, PhotoRemoval $removal)
     {
         abort_unless($photo->uploadSession->user_id === $r->user()->id, 404);
-        DB::transaction(function () use ($r, $photo) {
-            $locked = Photo::lockForUpdate()->findOrFail($photo->id);
-            if (! Storage::disk('local')->delete($locked->path)) {
-                abort(503, 'Unable to remove the photo. Please retry.');
-            }
-            DB::table('audit_events')->insert(['user_id' => $r->user()->id, 'action' => 'photo.deleted', 'resource_id' => $locked->id, 'created_at' => now()]);
-            $locked->delete();
-        });
+        abort_unless($removal->remove($photo, $r->user()->id), 503, 'Unable to remove the photo. Please retry.');
 
         return redirect()->route('collections.show', $photo->upload_session_id)->with('status', 'Photo deleted.');
     }
