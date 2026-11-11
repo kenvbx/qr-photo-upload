@@ -27,6 +27,11 @@ return new class extends Migration
     public function down(): void
     {
         Schema::dropIfExists('upload_receipts');
+        if (! Schema::hasIndex('photos', ['upload_session_id'])) {
+            Schema::table('photos', function (Blueprint $table) {
+                $table->index('upload_session_id');
+            });
+        }
         Schema::table('photos', function (Blueprint $table) {
             $table->dropUnique(['upload_session_id', 'sha256']);
             $table->dropColumn('sha256');

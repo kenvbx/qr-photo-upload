@@ -63,7 +63,7 @@ class PhotoWorkflowTest extends TestCase
         $c = $this->collection();
         $this->upload($c, [UploadedFile::fake()->image('../../evil.jpg', 40, 30), UploadedFile::fake()->image('second.png', 30, 20)])->assertSessionHasNoErrors()->assertRedirect();
         $this->assertEquals(2, $c->photos()->count());
-        $photo = $c->photos()->first();
+        $photo = $c->photos()->where('mime', 'image/jpeg')->firstOrFail();
         Storage::disk('local')->assertExists($photo->path);
         $this->assertStringNotContainsString('evil', $photo->path);
         $this->assertEquals('image/jpeg', $photo->mime);
