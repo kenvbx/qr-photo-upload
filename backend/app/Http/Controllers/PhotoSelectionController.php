@@ -3,20 +3,15 @@
 namespace App\Http\Controllers;
 
 use App\Models\UploadSession;
+use App\Services\PhotoExportBuilder;
 use App\Services\PhotoRemoval;
-use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
-use Phar;
-use PharData;
-use Symfony\Component\HttpFoundation\BinaryFileResponse;
-use Throwable;
 
 class PhotoSelectionController extends Controller
 {
-    public function store(Request $request, UploadSession $collection, PhotoRemoval $removal): BinaryFileResponse|RedirectResponse
+    public function store(Request $request, UploadSession $collection, PhotoRemoval $removal, PhotoExportBuilder $exports): RedirectResponse
     {
         abort_unless($collection->user_id === $request->user()->id, 404);
         $data = $request->validate([
@@ -28,7 +23,9 @@ class PhotoSelectionController extends Controller
         abort_unless($photos->count() === count($data['photos']), 404, 'Some photos are no longer available. Refresh the gallery.');
 
         if ($data['action'] === 'download') {
-            return $this->download($photos, $collection);
+            $export = $exports->request($collection, $data['photos']);
+
+            return redirect()->route('exports.show', $export);
         }
 
         $deleted = 0;
@@ -43,40 +40,5 @@ class PhotoSelectionController extends Controller
         }
 
         return $response;
-    }
-
-    private function download(Collection $photos, UploadSession $collection): BinaryFileResponse|RedirectResponse
-    {
-        $disk = Storage::disk('local');
-        foreach ($photos as $photo) {
-            if (! $disk->exists($photo->path)) {
-                return redirect()->route('collections.show', $collection)->withErrors(['photos' => 'A selected file is unavailable. Refresh the gallery and choose again.']);
-            }
-        }
-
-        $path = sys_get_temp_dir().'/gather-'.bin2hex(random_bytes(16)).'.zip';
-        $previousMask = umask(0077);
-        try {
-            $archive = new PharData($path, 0, null, Phar::ZIP);
-            foreach ($photos as $photo) {
-                $archive->addFile($disk->path($photo->path), 'photo-'.$photo->id.'.'.pathinfo($photo->path, PATHINFO_EXTENSION));
-            }
-            unset($archive);
-
-            return response()->download($path, 'collection-'.$collection->id.'-selected.zip', [
-                'Content-Type' => 'application/zip',
-                'Cache-Control' => 'private, no-store',
-                'X-Content-Type-Options' => 'nosniff',
-            ])->deleteFileAfterSend(true);
-        } catch (Throwable $exception) {
-            if (is_file($path)) {
-                unlink($path);
-            }
-            report($exception);
-
-            return redirect()->route('collections.show', $collection)->withErrors(['photos' => 'Unable to prepare the selected photos. Refresh the gallery and try again.']);
-        } finally {
-            umask($previousMask);
-        }
     }
 }

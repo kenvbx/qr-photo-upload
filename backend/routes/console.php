@@ -3,6 +3,7 @@
 use App\Models\User;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schedule;
 
 Artisan::command('admin:create {email} {--name=Organizer}', function () {
     $email = $this->argument('email');
@@ -42,3 +43,5 @@ Artisan::command('demo:seed', function () {
 
     return 0;
 })->purpose('Create a disposable local-only demo organizer');
+
+Schedule::command('exports:prune')->hourly()->withoutOverlapping();

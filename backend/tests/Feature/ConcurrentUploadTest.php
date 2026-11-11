@@ -111,6 +111,65 @@ PHP;
         }
     }
 
+    public function test_mysql_simultaneous_zip_requests_reuse_one_export_and_job(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Requires an isolated MySQL test database.');
+        }
+        $collection = $this->collection();
+        $directory = sys_get_temp_dir().'/qr-export-race-'.Str::uuid();
+        File::makeDirectory($directory.'/photos', 0700, true);
+        File::put($directory.'/photos/source.png', 'original');
+        $photo = $collection->photos()->create(['path' => 'source.png', 'mime' => 'image/png', 'bytes' => 8, 'width' => 40, 'height' => 30]);
+        $database = config('database.connections.mysql');
+        $environment = ['APP_ENV' => 'testing', 'DB_URL' => '', 'DB_CONNECTION' => 'mysql', 'DB_HOST' => $database['host'], 'DB_PORT' => (string) $database['port'], 'DB_DATABASE' => $database['database'], 'DB_USERNAME' => $database['username'], 'DB_PASSWORD' => $database['password'], 'PRIVATE_STORAGE_ROOT' => $directory.'/photos'];
+        $script = <<<'PHP'
+require 'vendor/autoload.php';
+$app=require 'bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+[, $collectionId, $photoId, $ready, $go]=$argv;
+touch($ready);
+$deadline=microtime(true)+15;
+while(!is_file($go)) { if(microtime(true)>$deadline) { exit(2); } usleep(10000); clearstatcache(true,$go); }
+$export=app(App\Services\PhotoExportBuilder::class)->request(App\Models\UploadSession::findOrFail($collectionId),[(int)$photoId]);
+echo $export->id;
+PHP;
+        $processes = [];
+        try {
+            foreach ([0, 1] as $index) {
+                $processes[] = new Process([PHP_BINARY, '-r', $script, (string) $collection->id, (string) $photo->id, $directory.'/ready-'.$index, $directory.'/go'], base_path(), $environment, null, 25);
+            }
+            DB::disconnect();
+            foreach ($processes as $process) {
+                $process->start();
+            }
+            $deadline = microtime(true) + 15;
+            while (! is_file($directory.'/ready-0') || ! is_file($directory.'/ready-1')) {
+                if (microtime(true) > $deadline) {
+                    $this->fail('ZIP request workers failed to become ready.');
+                }
+                usleep(10000);
+                clearstatcache();
+            }
+            touch($directory.'/go');
+            foreach ($processes as $process) {
+                $process->wait();
+                $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+            }
+            $this->assertSame($processes[0]->getOutput(), $processes[1]->getOutput());
+            $this->assertDatabaseCount('photo_exports', 1);
+            $this->assertDatabaseCount('jobs', 1);
+        } finally {
+            foreach ($processes as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+            File::deleteDirectory($directory);
+            DB::reconnect();
+        }
+    }
+
     private function collection(): UploadSession
     {
         return UploadSession::create(['user_id' => User::factory()->create()->id, 'title' => 'Concurrent upload test', 'token' => bin2hex(random_bytes(32)), 'expires_at' => now()->addDay()]);

@@ -12,7 +12,7 @@ const server = spawn('php', [
 ], { stdio: 'inherit', env: process.env });
 const worker = spawn('php', [
   '-d', 'memory_limit=256M', 'artisan', 'queue:work', 'database',
-  '--queue=thumbnails', '--sleep=1', '--tries=3', '--timeout=60', '--memory=256'
+  '--queue=thumbnails,exports', '--sleep=1', '--tries=3', '--timeout=60', '--memory=256'
 ], { cwd: resolve('backend'), stdio: 'inherit', env: process.env });
 let stopping = false;
 function stop(code) {

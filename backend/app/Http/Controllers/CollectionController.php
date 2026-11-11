@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\PhotoExport;
 use App\Models\UploadSession;
 use BaconQrCode\Renderer\Image\SvgImageBackEnd;
 use BaconQrCode\Renderer\ImageRenderer;
@@ -39,7 +40,9 @@ class CollectionController extends Controller
         $url = rtrim(config('app.url'), '/').'/u/'.$collection->token;
         $qr = (new Writer(new ImageRenderer(new RendererStyle(260, 4), new SvgImageBackEnd)))->writeString($url);
 
-        return view('collection', compact('collection', 'photos', 'url', 'qr'));
+        $exports = PhotoExport::where('upload_session_id', $collection->id)->latest()->limit(5)->get();
+
+        return view('collection', compact('collection', 'photos', 'url', 'qr', 'exports'));
     }
 
     public function close(Request $r, UploadSession $collection)

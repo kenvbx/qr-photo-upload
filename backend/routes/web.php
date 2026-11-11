@@ -4,6 +4,7 @@ use App\Http\Controllers\AuthController;
 use App\Http\Controllers\CollectionController;
 use App\Http\Controllers\GuestUploadController;
 use App\Http\Controllers\PhotoController;
+use App\Http\Controllers\PhotoExportController;
 use App\Http\Controllers\PhotoSelectionController;
 use Illuminate\Support\Facades\Route;
 
@@ -18,6 +19,9 @@ Route::middleware('auth')->group(function () {
     Route::get('/collections/{collection}', [CollectionController::class, 'show'])->name('collections.show');
     Route::post('/collections/{collection}/photos/selection', [PhotoSelectionController::class, 'store'])->middleware('throttle:photo-selection')->name('photos.selection');
     Route::post('/collections/{collection}/close', [CollectionController::class, 'close'])->name('collections.close');
+    Route::get('/exports/{export}', [PhotoExportController::class, 'show'])->name('exports.show');
+    Route::get('/exports/{export}/download', [PhotoExportController::class, 'download'])->name('exports.download');
+    Route::post('/exports/{export}/retry', [PhotoExportController::class, 'retry'])->middleware('throttle:photo-selection')->name('exports.retry');
     Route::get('/photos/{photo}', [PhotoController::class, 'show'])->name('photos.show');
     Route::get('/photos/{photo}/thumbnail', [PhotoController::class, 'thumbnail'])->name('photos.thumbnail');
     Route::delete('/photos/{photo}', [PhotoController::class, 'destroy'])->name('photos.destroy');

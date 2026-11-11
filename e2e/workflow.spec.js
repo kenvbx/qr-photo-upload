@@ -386,10 +386,19 @@ test('mobile gallery selects all, downloads ZIP and confirms only selected delet
  const checks = page.locator('input[name="photos[]"]');
  await checks.nth(0).check();
  await checks.nth(2).check();
- const downloadEvent = page.waitForEvent('download');
+ const selectedIds = await checks.evaluateAll(elements => elements.filter(element => element.checked).map(element => element.value));
  await page.getByRole('button', { name: 'Download ZIP' }).click();
+ await expect(page.getByRole('heading', { name: 'Your ZIP download.' })).toBeVisible();
+ await expect(page.getByRole('link', { name: 'Download ready ZIP' })).toBeVisible({ timeout: 15000 });
+ const exportUrl = page.url();
+ const downloadEvent = page.waitForEvent('download');
+ await page.getByRole('link', { name: 'Download ready ZIP' }).click();
  expect((await downloadEvent).suggestedFilename()).toMatch(/^collection-\d+-selected.zip$/);
+ expect(page.url()).toBe(exportUrl);
+ await page.screenshot({ path: 'screenshots/queued-zip-mobile.png', fullPage: true });
+ await page.getByRole('link', { name: 'Back to gallery' }).click();
  expect(page.url()).toBe(collectionUrl);
+ for (const id of selectedIds) await page.locator(`input[name="photos[]"][value="${id}"]`).check();
  await expect(page.locator('[data-selection-count]')).toHaveText('2 selected');
  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
  await page.screenshot({ path: 'screenshots/gallery-selection-mobile.png', fullPage: true });
@@ -441,9 +450,18 @@ test('lightbox reports failed images and a single photo remains usable; native g
  const nativePage = await native.newPage();
  await nativePage.goto(collectionUrl);
  await nativePage.locator('input[name="photos[]"]').check();
- const downloadEvent = nativePage.waitForEvent('download');
  await nativePage.getByRole('button', { name: 'Download ZIP' }).click();
+ await expect(nativePage.getByRole('heading', { name: 'Your ZIP download.' })).toBeVisible();
+ await expect.poll(async () => {
+  const response = await nativePage.request.get(nativePage.url(), { headers: { Accept: 'application/json' } });
+  return (await response.json()).data.status;
+ }, { timeout: 15000 }).toBe('ready');
+ await nativePage.reload();
+ const downloadEvent = nativePage.waitForEvent('download');
+ await nativePage.getByRole('link', { name: 'Download ready ZIP' }).click();
  expect((await downloadEvent).suggestedFilename()).toMatch(/selected\.zip$/);
+ await nativePage.getByRole('link', { name: 'Back to gallery' }).click();
+ await nativePage.locator('input[name="photos[]"]').check();
  await nativePage.getByRole('button', { name: 'Delete selected' }).click();
  await expect(nativePage.getByRole('heading', { name: 'Ready for the first photo' })).toBeVisible();
  await native.close();
@@ -484,4 +502,36 @@ test('real queue worker generates private bounded thumbnails while originals rem
  expect((await page.request.get(thumbnailUrl)).status()).toBe(404);
  expect((await page.request.get(originalUrl)).status()).toBe(404);
  await context.close();
+});
+
+
+test('queued ZIP page shows processing and reconnects after status polling fails', async ({ page, browser }) => {
+ await galleryWithPhotos(page, browser, 'ZIP status recovery');
+ await page.getByRole('checkbox', { name: 'Select this page' }).check();
+ let mode = 'processing';
+ await page.route('**/exports/*', async route => {
+  if (!route.request().headers()['accept']?.includes('application/json')) return route.continue();
+  if (mode === 'offline') return route.abort();
+  const response = await route.fetch();
+  const body = await response.json();
+  if (mode === 'processing') {
+   body.data.status = 'processing';
+   body.data.download_url = null;
+  }
+  await route.fulfill({ response, json: body });
+ });
+ await page.getByRole('button', { name: 'Download ZIP' }).click();
+ await expect(page.getByRole('heading', { name: 'Building your ZIP' })).toBeVisible({ timeout: 10000 });
+ await expect(page.getByRole('link', { name: 'Download ready ZIP' })).not.toBeVisible();
+ await page.screenshot({ path: 'screenshots/queued-zip-processing-desktop.png', fullPage: true });
+ mode = 'offline';
+ await expect(page.locator('[data-export-connection]')).toContainText('Status could not be refreshed', { timeout: 10000 });
+ mode = 'ready';
+ await expect(page.getByRole('link', { name: 'Download ready ZIP' })).toBeVisible({ timeout: 10000 });
+ await expect(page.locator('[data-export-connection]')).toBeEmpty();
+ const downloadEvent = page.waitForEvent('download');
+ await page.getByRole('link', { name: 'Download ready ZIP' }).click();
+ expect((await downloadEvent).suggestedFilename()).toMatch(/selected\.zip$/);
+ await page.getByRole('link', { name: 'Back to gallery' }).click();
+ await expect(page.getByRole('region', { name: 'Recent ZIP requests' })).toBeVisible();
 });

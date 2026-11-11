@@ -459,3 +459,35 @@ if (gallery) {
     });
   }
 }
+
+const exportPanel = document.querySelector('[data-export]');
+if (exportPanel) {
+  const titles = { queued: 'Waiting to start', processing: 'Building your ZIP', ready: 'Your ZIP is ready', failed: 'Unable to prepare this ZIP', expired: 'This ZIP has expired' };
+  const messages = { queued: 'Your request is saved. You can leave this page and return later.', processing: 'Gathering your original photos. This page updates automatically.', ready: 'Your original photos are ready to download.', failed: 'Retry, or return to the gallery if a selected photo was removed.', expired: 'Request a new copy to download these photos again.' };
+  let stopped = false;
+  let exportTimer;
+  async function updateExport() {
+    if (stopped) return;
+    try {
+      const response = await fetch(exportPanel.dataset.statusUrl, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+      if (!response.ok) throw new Error('Status unavailable');
+      const { data } = await response.json();
+      if (!Object.hasOwn(titles, data.status)) throw new Error('Invalid status');
+      exportPanel.dataset.status = data.status;
+      exportPanel.querySelector('[data-export-title]').textContent = titles[data.status];
+      const message = exportPanel.querySelector('[data-export-message]');
+      if (message.textContent !== messages[data.status]) message.textContent = messages[data.status];
+      const download = exportPanel.querySelector('[data-export-download]');
+      download.hidden = data.status !== 'ready';
+      download.href = data.download_url || '#';
+      exportPanel.querySelector('[data-export-retry]').hidden = !['failed', 'expired'].includes(data.status);
+      exportPanel.querySelector('[data-export-connection]').textContent = '';
+    } catch {
+      exportPanel.querySelector('[data-export-connection]').textContent = 'Status could not be refreshed. Reconnecting, or use Refresh status.';
+    }
+    if (!stopped) exportTimer = setTimeout(updateExport, ['queued', 'processing'].includes(exportPanel.dataset.status) ? 2000 : 15000);
+  }
+  window.addEventListener('pagehide', () => { stopped = true; clearTimeout(exportTimer); });
+  window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; updateExport(); } });
+  exportTimer = setTimeout(updateExport, 1000);
+}

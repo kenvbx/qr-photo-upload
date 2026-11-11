@@ -19,3 +19,11 @@
 
 ## Later
 Malware scanning, retention/cleanup scheduling, monitoring alerts, resumable uploads, object storage. Never describe these as implemented until verified.
+
+## Queued ZIP acceptance
+
+- Selecting Download ZIP queues work atomically with an owner-private export record and redirects to a status page without building an archive in the web request. Identical sorted selections reuse unexpired active/ready requests under concurrency.
+- Status shows queued, processing, ready, failed or expired, polls without auto-download and offers a manual refresh fallback. Gallery links recent requests. Ready downloads preserve original bytes and safe entry names, require the owner, and expire in 24 hours.
+- Builds retry at most 3 attempts with 10/60-second exception backoff and a 60-second timeout. Incomplete archives are not downloadable; failed requests can be retried, and duplicate retry does not enqueue extra work while active/ready.
+- Missing/deleted sources never produce a partial success. Deleting a selected source revokes access to an already-built ZIP. Source and export locks serialize normal build/delete/prune/retry mutations.
+- Hourly scheduler definition plus exports:prune remove expired final/building files and metadata; storage cleanup failure preserves the record. Expiry blocks access even without scheduler execution, and late jobs cannot recreate pruned exports.

@@ -3,10 +3,11 @@
 namespace Tests\Feature;
 
 use App\Models\Photo;
+use App\Models\PhotoExport;
 use App\Models\UploadSession;
 use App\Models\User;
+use App\Services\PhotoExportBuilder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use PharData;
 use Tests\TestCase;
@@ -36,7 +37,12 @@ class GallerySelectionTest extends TestCase
         $second = $this->photo($collection, 'second original');
         $this->photo($collection, 'unselected');
         $response = $this->actingAs(User::findOrFail($collection->user_id))->post(route('photos.selection', $collection), ['action' => 'download', 'photos' => [$first->id, $second->id]])
-            ->assertOk()->assertDownload('collection-'.$collection->id.'-selected.zip')->assertHeader('Content-Type', 'application/zip');
+            ->assertRedirect();
+        $export = PhotoExport::firstOrFail();
+        $this->assertSame('queued', $export->status);
+        $this->assertDatabaseCount('jobs', 1);
+        app(PhotoExportBuilder::class)->build($export->id);
+        $response = $this->get(route('exports.download', $export))->assertOk()->assertDownload('collection-'.$collection->id.'-selected.zip')->assertHeader('Content-Type', 'application/zip');
         $this->assertStringContainsString('private', $response->headers->get('Cache-Control'));
         $this->assertStringContainsString('no-store', $response->headers->get('Cache-Control'));
         $path = $response->baseResponse->getFile()->getPathname();
@@ -45,15 +51,9 @@ class GallerySelectionTest extends TestCase
             $this->assertCount(2, $archive);
             $this->assertSame('first original', $archive['photo-'.$first->id.'.png']->getContent());
             $this->assertSame('second original', $archive['photo-'.$second->id.'.png']->getContent());
-            $response->baseResponse->prepare(Request::create('/'));
-            ob_start();
-            $response->baseResponse->sendContent();
-            ob_end_clean();
-            $this->assertFileDoesNotExist($path);
+            $this->assertFileExists($path);
         } finally {
-            if (is_file($path)) {
-                unlink($path);
-            }
+            Storage::disk('local')->delete($export->archiveFile());
         }
         $this->assertDatabaseCount('photos', 3);
     }
@@ -127,7 +127,7 @@ class GallerySelectionTest extends TestCase
         $first = $this->photo($collection);
         $missing = $this->photo($collection);
         Storage::disk('local')->delete($missing->path);
-        $this->actingAs(User::findOrFail($collection->user_id))->post(route('photos.selection', $collection), ['action' => 'download', 'photos' => [$first->id, $missing->id]])
+        $this->actingAs(User::findOrFail($collection->user_id))->from(route('collections.show', $collection))->post(route('photos.selection', $collection), ['action' => 'download', 'photos' => [$first->id, $missing->id]])
             ->assertRedirect(route('collections.show', $collection))->assertSessionHasErrors(['photos' => 'A selected file is unavailable. Refresh the gallery and choose again.']);
     }
 
@@ -158,11 +158,16 @@ class GallerySelectionTest extends TestCase
         $second = $this->photo($collection);
         $disk = Storage::disk('local');
         $mock = \Mockery::mock($disk)->makePartial();
-        $mock->shouldReceive('path')->with($first->path)->once()->andReturn($disk->path($first->path));
-        $mock->shouldReceive('path')->with($second->path)->once()->andReturn($disk->path('unavailable.png'));
+        $mock->shouldReceive('path')->andReturnUsing(fn ($path) => $disk->path($path === $second->path ? 'unavailable.png' : $path));
         Storage::shouldReceive('disk')->with('local')->andReturn($mock);
-        $this->actingAs(User::findOrFail($collection->user_id))->post(route('photos.selection', $collection), ['action' => 'download', 'photos' => [$first->id, $second->id]])
-            ->assertRedirect(route('collections.show', $collection))->assertSessionHasErrors(['photos' => 'Unable to prepare the selected photos. Refresh the gallery and try again.']);
+        $this->actingAs(User::findOrFail($collection->user_id))->post(route('photos.selection', $collection), ['action' => 'download', 'photos' => [$first->id, $second->id]])->assertRedirect();
+        $export = PhotoExport::firstOrFail();
+        try {
+            app(PhotoExportBuilder::class)->build($export->id);
+            $this->fail('Expected archive read failure.');
+        } catch (\RuntimeException $exception) {
+            $disk->assertMissing([$export->archiveFile(), $export->temporaryFile()]);
+        }
         $this->assertDatabaseCount('photos', 2);
         $disk->assertExists([$first->path, $second->path]);
     }

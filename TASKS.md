@@ -9,7 +9,7 @@
 - [x] Verify MySQL concurrency with real parallel uploads in CI.
 - [ ] Deploy a demo when requested/configured.
 
-Verified locally 2026-11-12: 48 backend tests on SQLite (411 assertions; 3 MySQL-only tests skipped), and 13 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
+Verified locally 2026-11-12: 56 backend tests on SQLite (512 assertions; 4 MySQL-only tests skipped), and 14 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
 
 - [x] Guest photo previews, filename/size, keyboard-accessible removal, client validation feedback and browser regression coverage.
 
@@ -23,3 +23,6 @@ Verified locally 2026-11-12: 48 backend tests on SQLite (411 assertions; 3 MySQL
 - [x] Transactional database thumbnail queue, private bounded GD derivatives, retries/failed jobs and old-photo backfill/repair.
 - [x] Real worker browser coverage, safe deletion/late jobs, EXIF/transparency, private placeholders and SQLite background-worker locking.
 - [x] Add a two-process MySQL thumbnail-generation/deletion race to GitHub CI; confirm its run before claiming verification.
+
+- [x] Queued private ZIPs, atomic request/job creation, duplicate-selection reuse, status polling/manual fallback and owner-only retry/download.
+- [x] 24-hour expiry/prune schedule, partial-build cleanup, source deletion revocation and real-worker browser coverage; MySQL simultaneous ZIP requests included in CI.

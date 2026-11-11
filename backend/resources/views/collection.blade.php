@@ -20,6 +20,9 @@
         <noscript><p class="hint">Use the checkboxes to select photos. Deletion is permanent.</p></noscript>
     </form>
     @endif
+    @if($exports->count())
+    <section class="export-history" aria-label="Recent ZIP requests"><h3>Recent ZIP requests</h3><ul>@foreach($exports as $export)<li><a class="text-button" href="{{ route('exports.show', $export) }}">ZIP · {{ count($export->photo_ids) }} photos · {{ $export->expires_at->isPast() ? 'Expired' : 'View status' }} · {{ $export->created_at->format('M j H:i') }} UTC</a></li>@endforeach</ul></section>
+    @endif
     <div class="photo-grid">
     @forelse($photos as $photo)
         <article class="photo-card" data-photo-id="{{ $photo->id }}" data-thumbnail-status="{{ $photo->thumbnail_status }}">
