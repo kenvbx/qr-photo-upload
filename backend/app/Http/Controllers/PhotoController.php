@@ -9,6 +9,18 @@ use Illuminate\Support\Facades\Storage;
 
 class PhotoController extends Controller
 {
+    public function thumbnail(Request $request, Photo $photo)
+    {
+        abort_unless($photo->uploadSession->user_id === $request->user()->id, 404);
+        $disk = Storage::disk('local');
+        $headers = ['Content-Type' => 'image/jpeg', 'X-Content-Type-Options' => 'nosniff', 'Cache-Control' => 'private, no-store'];
+        if ($photo->thumbnail_status === 'ready' && $disk->exists($photo->thumbnailFile())) {
+            return $disk->response($photo->thumbnailFile(), null, $headers);
+        }
+
+        return response()->view('thumbnail-placeholder', ['label' => $photo->thumbnail_status === 'pending' ? 'Preview processing' : 'Preview unavailable'], 200, array_merge($headers, ['Content-Type' => 'image/svg+xml']));
+    }
+
     public function show(Request $r, Photo $photo)
     {
         abort_unless($photo->uploadSession->user_id === $r->user()->id, 404);

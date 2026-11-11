@@ -73,3 +73,4 @@ body.lightbox-open{overflow:hidden}
 .lightbox-select input{accent-color:#8fbf9d}
 #lightbox-help{text-align:center}
 @media(max-width:600px){.gallery-toolbar{padding:12px}.gallery-bulk-actions{gap:8px}.gallery-lightbox{width:calc(100% - 16px);height:calc(100dvh - 16px);border-radius:10px}.lightbox-panel{padding:12px;gap:10px}.lightbox-controls{gap:6px}.lightbox-button{padding:9px 10px}.lightbox-select{font-size:12px;gap:6px}.lightbox-footer{flex-wrap:wrap}.lightbox-details{flex:1}}
+.thumbnail-status{font-size:12px;margin:5px 0;line-height:1.5}

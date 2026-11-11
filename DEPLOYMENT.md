@@ -2,7 +2,7 @@
 
 ## Deploy checklist
 
-1. Provision one Laravel PHP 8.3+ instance (GD, Phar and PDO MySQL), MySQL 8+ and persistent private storage. Point web root exclusively to `backend/public`.
+1. Provision one Laravel PHP 8.3+ instance (GD, Phar, optional EXIF for JPEG orientation, and PDO MySQL), MySQL 8+ and persistent private storage. Point web root exclusively to `backend/public`.
 2. Run `composer install --no-dev --optimize-autoloader`. Configure `.env.production.example`, generate an application key once, and keep it stable across releases.
 3. Set `APP_URL` to the HTTPS origin, `APP_ENV=production`, `APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`; configure least-privilege DB credentials outside Git. Set private directory permissions for the PHP service account. Do not create a public storage symlink for photos.
 4. Set PHP `upload_max_filesize=10M`, `post_max_size=110M`, `max_file_uploads=10`, `memory_limit=256M` or higher; proxy body limit at least 110 MB and a suitable bounded upload timeout. Laravel validation still enforces limits.
@@ -31,3 +31,14 @@ Smoke test real transfer progress, retry after loss of a response following comm
 ## Gallery selection smoke check
 
 Open a private collection, browse the lightbox with keyboard and touch controls, select several photos, download the ZIP and compare original bytes. Cancel then confirm deletion, verify unselected photos remain and confirm another owner/guest cannot use selection endpoints. Test missing-file feedback and the native form without JavaScript. Keep OS temporary storage private and allow capacity for up to 240 MB of photo data per ZIP request; archives are deleted after normal sending or build errors. A process crash can leave `gather-*.zip` files in the PHP temp directory; establish an age-based cleanup policy before public use. Selection actions have a separate 20 requests/owner/minute rate limit.
+
+## Thumbnail worker release and operations
+
+1. Back up DB/private storage and deploy the additive thumbnail migration before new code handles uploads. Keep `QUEUE_CONNECTION=database`; thumbnail jobs explicitly target the database connection, whose jobs table must remain on the same default DB connection as photos. Retain the existing jobs/failed_jobs migrations.
+2. Run `php artisan photos:thumbnails` once for existing pending photos. This only queues work. A retry/repair run can use `--collection=ID --retry-failed`. No original is rewritten.
+3. Supervise `php -d memory_limit=256M artisan queue:work database --queue=thumbnails --sleep=1 --tries=3 --timeout=60 --memory=256` from `backend`, using the same environment/private storage and PHP modules as web requests. Configure automatic worker restart and at least 90 seconds graceful stop time. Keep retry_after above timeout (default 90 > 60 seconds); do not run thumbnail workers against a separate jobs DB.
+4. After releases/config changes, use `php artisan queue:restart` and confirm the supervisor launches a worker on the new code. Restart signals are cache-backed; keep the configured database cache available to web and workers.
+5. Monitor thumbnails queue age/count, pending/failed photo counts and `php artisan queue:failed`. Fix disk/source errors, then retry a failed UUID with `queue:retry UUID` or requeue failed photos with the scoped backfill command. Worker processes should have at least 256 MB PHP memory, writable persistent private storage and GD JPEG/PNG/WebP support. Enable PHP EXIF for orientation-aware previews.
+6. Smoke test pending placeholders, ready JPEGs, byte-identical original downloads, retries after storage failure, failed jobs, old-photo backfill and deletion while queued. Guests/other owners must be unable to fetch thumbnails. Refresh the gallery to update readiness. Original acceptance does not imply preview completion.
+
+Normal render failures remove partial files; crashes can leave `.tmp`/unpublished thumbnails. Backfill overwrites incomplete derivatives and repairs missing ready files; deletion removes deterministic final/temporary paths under the worker's photo lock. Reconcile after crashes and retain consistent database/private-storage backups. Stopping the worker leaves safe pending placeholders and usable originals. A server rollback must stop/restart thumbnail workers before restoring code/schema; do not run new jobs against an old schema.

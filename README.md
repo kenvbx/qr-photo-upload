@@ -12,6 +12,7 @@
 - Idempotent upload receipts and SHA-256 deduplication of identical bytes within a collection, including renamed files; duplicate photos do not consume quota.
 - Multiple JPEG/PNG/WebP uploads: 10 MB each, 10 per request, 100 per collection; actual MIME, image decoding and pixel bounds (20 MP / 12,000 pixels per side).
 - Random private file paths; authorized image display, original download and deletion.
+- Database-queued JPEG gallery thumbnails (maximum 480 px, no upscaling), bounded retries and backfill for existing photos. Gallery placeholders keep originals available while processing; lightbox, download and ZIP use the originals.
 - Gallery lightbox with previous/next, arrow keys, Escape, focus containment, loading/error feedback and selection inside the viewer.
 - Select individual photos or the current page (up to 24), clear selection, download originals as a private ZIP, or confirm bulk deletion. Selection is local to the current gallery page.
 - Server-side ownership, CSRF, named rate limits, audit events and upload failure compensation.
@@ -19,7 +20,7 @@
 
 ## Local setup
 
-Requires PHP 8.3+ with GD, Phar, fileinfo, XML, mbstring, SQLite or MySQL PDO support; Composer 2. Node 20+ is needed only for browser tests. Keep at least 256 MB PHP memory available for bounded image decoding.
+Requires PHP 8.3+ with GD, Phar, fileinfo, XML, mbstring, SQLite or MySQL PDO support; Composer 2. Node 20+ is needed only for browser tests. Keep at least 256 MB PHP memory available for bounded image decoding in both web and queue processes. Enable the optional PHP EXIF extension to honor JPEG orientation in thumbnails (enabled in CI).
 
 ```sh
 cd backend
@@ -31,6 +32,12 @@ php -r "file_exists('database/database.sqlite') || touch('database/database.sqli
 php artisan migrate
 php artisan admin:create you@example.com
 php -d upload_max_filesize=10M -d post_max_size=110M -d memory_limit=256M artisan serve --host=127.0.0.1 --port=8038
+```
+
+In a second terminal inside `backend`, start the thumbnail worker:
+
+```sh
+php -d memory_limit=256M artisan queue:work database --queue=thumbnails --sleep=1 --tries=3 --timeout=60 --memory=256
 ```
 
 The admin command asks for a password of at least 12 characters; no public registration exists. Open http://127.0.0.1:8038. `.env.example` uses SQLite for reproducible local setup. SQLite is verified locally; MySQL 8.4 is verified in GitHub Actions, including concurrent upload replay and quota checks.
@@ -53,7 +60,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Verified locally on 2026-11-11: 37 passing PHP tests / 265 assertions on SQLite (2 MySQL-only concurrency tests skipped) and 12 Chromium tests. The MySQL CI job runs the full backend suite, including concurrent same-ID uploads and parallel requests competing for the last available slot. Browser tests decode the rendered QR and use its real URL, upload bytes over HTTP, check private gallery access, original download, delete, closure, CSRF rejection and mobile layout. Preview tests cover keyboard removal, unchanged original bytes for retained photos, no upload before submission, invalid files and selection recovery. Fixtures use a separate `e2e.sqlite` database and private test storage. Reliability tests transfer real bytes, hold a real HTTP response after receipt, simulate connection loss, retry the original upload ID, verify no duplicate gallery entries, and exercise cooldown, validation, and the native form without JavaScript. Gallery tests cover keyboard focus and navigation, mobile/landscape layout, synchronized selection, ZIP download, delete confirmation/cancellation, image load failure, native forms, mixed-owner rejection, partial deletion failure and stable pagination. Screenshots are generated under `screenshots/`; the gallery screenshot contains a small synthetic test image.
+Verified locally on 2026-11-12: 48 passing PHP tests / 411 assertions on SQLite (3 MySQL-only concurrency tests skipped) and 13 Chromium tests. The MySQL CI job runs the full backend suite, including concurrent same-ID uploads, parallel requests competing for the last available slot, and thumbnail generation racing deletion. Browser tests decode the rendered QR and use its real URL, upload bytes over HTTP, check private gallery access, original download, delete, closure, CSRF rejection and mobile layout. Preview tests cover keyboard removal, unchanged original bytes for retained photos, no upload before submission, invalid files and selection recovery. Fixtures use a separate `e2e.sqlite` database and private test storage. Reliability tests transfer real bytes, hold a real HTTP response after receipt, simulate connection loss, retry the original upload ID, verify no duplicate gallery entries, and exercise cooldown, validation, and the native form without JavaScript. Gallery tests cover keyboard focus and navigation, mobile/landscape layout, synchronized selection, ZIP download, delete confirmation/cancellation, image load failure, native forms, mixed-owner rejection, partial deletion failure and stable pagination. Thumbnail tests exercise a real database worker, atomic queue insertion, failed-job exhaustion/recovery, original byte preservation, bounds, JPEG EXIF orientations, transparency, private routes, cleanup and backfill. The browser harness starts and stops a separate worker alongside the test server. Screenshots are generated under `screenshots/`; the gallery screenshot contains a small synthetic test image.
 
 ## Documentation
 
@@ -66,7 +73,7 @@ Verified locally on 2026-11-11: 37 passing PHP tests / 265 assertions on SQLite 
 
 ## Known limits
 
-No public deployment has been completed. MySQL concurrency verification is covered by the dedicated CI job; see its latest result before claiming deployment readiness. This is a synchronous single-instance MVP with manual gallery refresh. No thumbnails/queue, malware scanner, EXIF stripping or automatic retention cleanup is implemented. Retries use the same upload ID; choosing the same exact file bytes again with a new ID also skips duplicates within that collection. Edited or re-encoded images have different hashes. Original photos may contain GPS metadata. Database and storage are not atomic; compensation handles normal errors, while process crashes can leave orphan files. PHP/proxy request limits must match application limits. HEIC, SVG, GIF and video are unsupported. Collection expiry stops contributions; owner access remains until individual photos are deleted.
+No public deployment has been completed. MySQL concurrency verification is covered by the dedicated CI job; see its latest result before claiming deployment readiness. This is a single-instance MVP with synchronous original upload validation, asynchronous thumbnails and manual gallery refresh. No malware scanner, original EXIF stripping or automatic retention cleanup is implemented. Thumbnail processing requires a running worker; success confirms original acceptance, and preview readiness is separate. Retries use the same upload ID; choosing the same exact file bytes again with a new ID also skips duplicates within that collection. Edited or re-encoded images have different hashes. Original photos may contain GPS metadata. Database and storage are not atomic; compensation handles normal errors, while process crashes can leave orphan files. PHP/proxy request limits must match application limits. HEIC, SVG, GIF and video are unsupported. Collection expiry stops contributions; owner access remains until individual photos are deleted.
 
 ## Upload/retry contract and upgrading
 
@@ -85,3 +92,24 @@ Open a photo to browse the current page in the lightbox. Use the arrow buttons o
 `POST /collections/{collection}/photos/selection` requires the owner, CSRF, an action (`download` or `delete`) and 1–24 distinct `photos[]` IDs from that collection. It permits 20 requests per owner/minute. Any foreign or stale ID rejects the whole request before work starts. ZIP archives contain original bytes under safe photo-ID filenames; they use PHP PharData with no added package. ZIP files are private temporary files removed after sending or build failure. A missing/unreadable source returns to the gallery with an actionable error instead of a partial archive. Reserve temporary disk capacity for up to 240 MB of originals per request. Interrupted PHP processes may leave temporary archives; production needs an age-based cleanup policy.
 
 Deletion uses the same per-photo locked removal and audit behavior as individual deletion. A storage failure preserves that photo's metadata and reports how many other photos were removed; batch deletion is best effort, not atomic across files.
+
+## Thumbnail queue and upgrading
+
+Back up before `php artisan migrate --force`. The additive migration gives existing photos a pending thumbnail status; it does not rewrite their originals. New unique uploads enqueue one `GeneratePhotoThumbnail` job on the `database` connection and `thumbnails` queue inside the same transaction as the photo/receipt. The queue connection deliberately uses the application's default database so job insertion participates in that transaction. Do not split its jobs table into a different database/connection. Upload replay/content duplicates do not enqueue extra work. Thumbnail jobs explicitly use the database queue even if an older checkout still has `QUEUE_CONNECTION=sync`; update that value to `database` and run the worker above.
+
+To enqueue old pending photos or repair missing derivatives:
+
+```sh
+cd backend
+php artisan photos:thumbnails
+# Optional scope and recovery after fixing storage/source failures:
+php artisan photos:thumbnails --collection=1 --retry-failed
+php artisan queue:failed
+# Alternatively retry a selected failed-job UUID with queue:retry UUID.
+```
+
+The command skips ready files and, by default, exhausted failures. Repeated backfill can enqueue duplicate pending jobs; processing is safe because a ready derivative is a no-op. Jobs have 3 attempts, 10/60-second exception backoff and a 60-second timeout. Keep the database queue's `retry_after` above the timeout (default 90 seconds). Failed originals remain accessible; normal exhaustion records `failed_jobs` and marks the preview failed. Deleted photos are skipped safely, and stale failure callbacks cannot downgrade a ready preview.
+
+The worker bounds source size/dimensions before decoding with GD, fits the image within 480 × 480 without enlargement, flattens transparency onto white, and writes JPEG at quality 82. JPEG EXIF orientation is applied when PHP EXIF is enabled; without it, stored pixel orientation is used. Originals and their metadata remain unchanged. Private thumbnail files are published from a temporary file under a per-photo mutation lock; the gallery endpoint never serves a partially written preview. The same lock serializes deletion and processing. Normal errors clean up partial derivatives. A process crash can leave a `.tmp` or unpublished derivative; rerun backfill or delete the photo after restoring healthy storage.
+
+`GET /photos/{photo}/thumbnail` requires the collection owner and uses private/no-store responses. Pending or unavailable previews return a small static SVG placeholder rather than transferring the original. Refresh the gallery after processing. SQLite uses WAL, a 10-second busy timeout, and reserves its writer before app mutation reads (PHP 8.3), with immediate transactions where supported. Use MySQL for deployment and independently supervise the worker; no throughput claim is made for SQLite.

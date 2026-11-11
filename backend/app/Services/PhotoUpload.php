@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Jobs\GeneratePhotoThumbnail;
 use App\Models\UploadSession;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
@@ -24,6 +25,9 @@ class PhotoUpload
         $paths = [];
         try {
             return DB::transaction(function () use ($session, $entries, $uploadKey, $fingerprint, &$paths) {
+                if (DB::getDriverName() === 'sqlite') {
+                    DB::table('upload_sessions')->where('id', $session->id)->update(['id' => DB::raw('id')]);
+                }
                 $locked = UploadSession::query()->lockForUpdate()->findOrFail($session->id);
                 if ($uploadKey !== null) {
                     $receipt = DB::table('upload_receipts')->where('upload_session_id', $locked->id)->where('upload_key', $uploadKey)->first();
@@ -52,7 +56,8 @@ class PhotoUpload
                     if (! Storage::disk('local')->putFileAs(dirname($path), $entry['file'], basename($path))) {
                         throw new \RuntimeException('Photo storage failed.');
                     }
-                    $locked->photos()->create(['path' => $path, 'mime' => $entry['mime'], 'bytes' => $entry['file']->getSize(), 'width' => $entry['width'], 'height' => $entry['height'], 'sha256' => $entry['sha256']]);
+                    $photo = $locked->photos()->create(['path' => $path, 'mime' => $entry['mime'], 'bytes' => $entry['file']->getSize(), 'width' => $entry['width'], 'height' => $entry['height'], 'sha256' => $entry['sha256']]);
+                    GeneratePhotoThumbnail::dispatch($photo->id);
                 }
                 $result = ['uploaded' => count($new), 'duplicates' => count($entries) - count($new), 'replayed' => false];
                 if ($uploadKey !== null) {

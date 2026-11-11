@@ -68,8 +68,8 @@ test('responsive organizer screens and logout', async ({ page }) => {
  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
 });
 
-function previewImage(name, color = [74, 124, 94]) {
- const image = new PNG({ width: 80, height: 60 });
+function previewImage(name, color = [74, 124, 94], width = 80, height = 60) {
+ const image = new PNG({ width, height });
  for (let i = 0; i < image.data.length; i += 4) {
   image.data[i] = color[0]; image.data[i + 1] = color[1]; image.data[i + 2] = color[2]; image.data[i + 3] = 255;
  }
@@ -121,8 +121,8 @@ test('guest previews photos locally, removes a file with keyboard and uploads on
  await page.getByRole('link', { name: 'Refresh gallery' }).click();
  await expect(page.locator('.photo-card')).toHaveCount(2);
  const saved = [];
- for (const image of await page.locator('.photo-card img').all()) {
-  const response = await page.request.get(await image.getAttribute('src'));
+ for (const link of await page.locator('[data-lightbox-photo]').all()) {
+  const response = await page.request.get(await link.getAttribute('href'));
   expect(response.ok()).toBe(true);
   saved.push((await response.body()).toString('base64'));
  }
@@ -447,4 +447,41 @@ test('lightbox reports failed images and a single photo remains usable; native g
  await nativePage.getByRole('button', { name: 'Delete selected' }).click();
  await expect(nativePage.getByRole('heading', { name: 'Ready for the first photo' })).toBeVisible();
  await native.close();
+});
+
+
+test('real queue worker generates private bounded thumbnails while originals remain unchanged', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Queued thumbnails');
+ const context = await browser.newContext();
+ const guest = await context.newPage();
+ const original = previewImage('large-original.png', [74, 124, 94], 1600, 1000);
+ await guest.goto(url);
+ await guest.locator('input[type=file]').setInputFiles(original);
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: 'Thank you!' })).toBeVisible();
+ await page.reload();
+ const card = page.locator('.photo-card').first();
+ const thumbnailUrl = await card.locator('img').getAttribute('src');
+ expect(thumbnailUrl).toMatch(/\/photos\/\d+\/thumbnail$/);
+ await expect.poll(async () => {
+  const response = await page.request.get(thumbnailUrl);
+  return response.headers()['content-type'];
+ }, { timeout: 15000 }).toBe('image/jpeg');
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(card).toHaveAttribute('data-thumbnail-status', 'ready');
+ await expect.poll(() => card.locator('img').evaluate(image => image.complete && image.naturalWidth)).toBe(480);
+ expect(await card.locator('img').evaluate(image => image.naturalHeight)).toBe(300);
+ const originalUrl = await card.locator('[data-lightbox-photo]').getAttribute('href');
+ const response = await page.request.get(originalUrl);
+ expect((await response.body()).toString('base64')).toBe(original.buffer.toString('base64'));
+ expect((await context.request.get(thumbnailUrl, { maxRedirects: 0 })).status()).toBe(302);
+ await card.locator('[data-lightbox-photo]').click();
+ await expect(page.getByRole('dialog').locator('.lightbox-image')).toHaveAttribute('src', originalUrl);
+ await page.keyboard.press('Escape');
+ await page.screenshot({ path: 'screenshots/gallery-thumbnails-desktop.png', fullPage: true });
+ page.once('dialog', dialog => dialog.accept());
+ await card.getByRole('button', { name: 'Delete', exact: true }).click();
+ expect((await page.request.get(thumbnailUrl)).status()).toBe(404);
+ expect((await page.request.get(originalUrl)).status()).toBe(404);
+ await context.close();
 });

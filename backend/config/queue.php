@@ -37,7 +37,8 @@ return [
 
         'database' => [
             'driver' => 'database',
-            'connection' => env('DB_QUEUE_CONNECTION'),
+            // Thumbnail jobs and photos must commit on the same database connection.
+            'connection' => null,
             'table' => env('DB_QUEUE_TABLE', 'jobs'),
             'queue' => env('DB_QUEUE', 'default'),
             'retry_after' => (int) env('DB_QUEUE_RETRY_AFTER', 90),

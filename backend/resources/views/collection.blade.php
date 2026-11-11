@@ -22,15 +22,15 @@
     @endif
     <div class="photo-grid">
     @forelse($photos as $photo)
-        <article class="photo-card" data-photo-id="{{ $photo->id }}">
+        <article class="photo-card" data-photo-id="{{ $photo->id }}" data-thumbnail-status="{{ $photo->thumbnail_status }}">
             <div class="gallery-photo-media">
                 <a class="gallery-open" href="{{ route('photos.show', $photo) }}" target="_blank" rel="noopener" aria-label="View photo {{ $photo->id }}" data-lightbox-photo data-title="Photo {{ $photo->id }}" data-details="{{ number_format($photo->bytes/1024/1024,2) }} MB · {{ $photo->width }} × {{ $photo->height }}" data-download="{{ route('photos.show', [$photo, 'download' => 1]) }}">
-                    <img src="{{ route('photos.show', $photo) }}" alt="Uploaded photo {{ $photo->id }}" width="{{ $photo->width }}" height="{{ $photo->height }}" loading="lazy">
+                    <img src="{{ route('photos.thumbnail', $photo) }}" alt="Uploaded photo {{ $photo->id }}" width="{{ $photo->width }}" height="{{ $photo->height }}" loading="lazy">
                     <span class="gallery-view-hint" aria-hidden="true">View photo</span>
                 </a>
                 <label class="gallery-photo-select"><input type="checkbox" name="photos[]" value="{{ $photo->id }}" form="photo-selection" aria-label="Select photo {{ $photo->id }}"><span class="sr-only">Select photo {{ $photo->id }}</span></label>
             </div>
-            <div class="photo-info"><strong>Photo {{ $photo->id }}</strong><span>{{ number_format($photo->bytes/1024/1024,2) }} MB · {{ $photo->width }} × {{ $photo->height }}</span><div class="photo-actions"><a class="text-button" href="{{ route('photos.show',[$photo,'download'=>1]) }}">Download</a><form method="post" action="{{ route('photos.destroy',$photo) }}" data-confirm="Permanently delete this photo?">@csrf @method('DELETE')<button class="text-button danger">Delete</button></form></div></div>
+            <div class="photo-info"><strong>Photo {{ $photo->id }}</strong>@if($photo->thumbnail_status !== 'ready')<p class="thumbnail-status muted">{{ $photo->thumbnail_status === 'failed' ? 'Preview unavailable. Original available.' : 'Preview processing. Refresh to update.' }}</p>@endif<span>{{ number_format($photo->bytes/1024/1024,2) }} MB · {{ $photo->width }} × {{ $photo->height }}</span><div class="photo-actions"><a class="text-button" href="{{ route('photos.show',[$photo,'download'=>1]) }}">Download</a><form method="post" action="{{ route('photos.destroy',$photo) }}" data-confirm="Permanently delete this photo?">@csrf @method('DELETE')<button class="text-button danger">Delete</button></form></div></div>
         </article>
     @empty
         <div class="empty"><div class="empty-icon" aria-hidden="true">↗</div><h3>Ready for the first photo</h3><p>Share the QR code with your guests. Their photos will appear here after you refresh.</p></div>

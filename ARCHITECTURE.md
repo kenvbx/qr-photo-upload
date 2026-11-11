@@ -16,7 +16,7 @@ DB and filesystem are not an atomic resource: compensate failed uploads by delet
 ## Operations and tradeoffs
 Single-instance local storage is simple but has a single point of failure. Back up database and private disk together and test restore. HTTPS is required for deployment; use narrow trusted proxies, secure cookies and debug off. APP_URL must be reachable from phone; localhost QR works only on the host itself. No unrequested public deployment.
 
-Targets are assumptions, not benchmark claims. Track upload successes/failures, disk use, request latency and server errors. A health endpoint is Laravel /up. No queue is needed in the synchronous MVP; thumbnails should become queued work when introduced.
+Targets are assumptions, not benchmark claims. Track upload successes/failures, disk use, request latency and server errors. A health endpoint is Laravel /up. Original upload validation remains synchronous. Database-queued thumbnails reduce gallery image transfer without delaying the acceptance response for resizing.
 
 ## Reliable uploads
 
@@ -35,3 +35,13 @@ Blade renders 24 photos per page with deterministic timestamp/ID ordering. Nativ
 The authenticated selection route validates owner, action and 1–24 distinct IDs scoped to the collection before doing work. ZIP creation uses built-in PharData and private OS temporary files (restrictive umask), then BinaryFileResponse removes the archive after sending. Build failures clean up and return gallery feedback; abrupt process exits require operational cleanup. No ZIP content or original bytes are loaded into a single application string. Batch size and per-owner rate limits bound work, while temp disk capacity must accommodate the selected originals.
 
 Individual and bulk deletion share PhotoRemoval: row lock, delete bytes, audit, remove row. A normal filesystem failure retains metadata. Each photo commits separately and batch feedback reports partial success; DB/file crash reconciliation remains necessary. Bulk actions keep guest access and private image authorization unchanged.
+
+## Queued thumbnails
+
+Photos track pending/ready/failed thumbnail state and derived dimensions/byte size. Each newly stored photo dispatches an integer-ID job to the database `thumbnails` queue before commit; jobs and photos intentionally share the application's default DB connection. The job row, photo, receipt and audit commit atomically. If enqueueing fails, normal upload compensation removes the original. No after-commit broker call can turn a committed receipt into an upload error. Duplicate receipt/content paths enqueue nothing.
+
+The worker acquires a per-photo mutation lock, returns for deleted/already-ready photos, validates bounded input again, uses GD to produce a JPEG fitting 480 px without upscaling, and publishes via temporary-file rename before marking ready. With EXIF enabled, all 8 JPEG orientations are supported; PNG/WebP alpha is flattened onto white. Stored originals remain byte-identical. Deletion takes the same lock and removes final/temporary derivatives before original bytes and metadata; if removing an original fails after removing its derivative, backfill can repair the missing preview. Lock duration includes decoding to avoid generation/deletion races in this local-disk MVP.
+
+MySQL uses InnoDB row locks. SQLite is a local/test option: WAL and a 10-second busy timeout permit concurrent readers, while app photo mutations/upload transactions reserve a writer before reads on PHP 8.3 to avoid deferred-read lock-upgrade failures. Immediate transactions cover supported newer PHP versions. SQLite still serializes writes; do not treat browser tests as evidence of MySQL locking behavior. CI includes two-process thumbnail-generation/deletion coverage on MySQL.
+
+Jobs allow 3 attempts with 10/60-second exception backoff, timeout 60 seconds and database retry_after 90 seconds. Exhaustion is recorded in failed_jobs and marks the thumbnail failed unless another attempt already produced a ready preview. photos:thumbnails backfills pending/missing derivatives, optionally scopes to one collection and requeues exhausted failures. It can enqueue redundant pending jobs; the renderer is idempotent. A separately supervised worker and shared private storage are required. Normal partial-write failures are compensated under the lock; hard crashes still need reconciliation. The thumbnail route serves owner-only JPEGs or bounded static placeholders with no-store, while gallery refresh updates readiness.

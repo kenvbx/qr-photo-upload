@@ -27,6 +27,7 @@ class ConcurrentUploadTest extends TestCase
         $this->assertSame([false, true], array_values(array_unique(array_column($results, 'replayed'), SORT_REGULAR)));
         $this->assertDatabaseCount('photos', 1);
         $this->assertDatabaseCount('upload_receipts', 1);
+        $this->assertDatabaseCount('jobs', 1);
     }
 
     public function test_mysql_parallel_distinct_photos_cannot_exceed_session_quota(): void
@@ -43,6 +44,71 @@ class ConcurrentUploadTest extends TestCase
         $this->assertSame(1, count(array_filter($results, fn (array $result) => ($result['status'] ?? '') === 'rejected')));
         $this->assertDatabaseCount('photos', 100);
         $this->assertDatabaseCount('upload_receipts', 1);
+        $this->assertDatabaseCount('jobs', 1);
+    }
+
+    public function test_mysql_thumbnail_generation_racing_deletion_cannot_leave_an_orphan_derivative(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Requires an isolated MySQL test database.');
+        }
+        $collection = $this->collection();
+        $directory = sys_get_temp_dir().'/qr-thumbnail-race-'.Str::uuid();
+        File::makeDirectory($directory.'/photos/photos', 0700, true);
+        $source = UploadedFile::fake()->image('source.png', 4000, 3000);
+        File::copy($source->getRealPath(), $directory.'/photos/photos/source.png');
+        $photo = $collection->photos()->create(['path' => 'photos/source.png', 'mime' => 'image/png', 'bytes' => $source->getSize(), 'width' => 4000, 'height' => 3000]);
+        $database = config('database.connections.mysql');
+        $environment = ['APP_ENV' => 'testing', 'DB_URL' => '', 'DB_CONNECTION' => 'mysql', 'DB_HOST' => $database['host'], 'DB_PORT' => (string) $database['port'], 'DB_DATABASE' => $database['database'], 'DB_USERNAME' => $database['username'], 'DB_PASSWORD' => $database['password'], 'PRIVATE_STORAGE_ROOT' => $directory.'/photos'];
+        $script = <<<'PHP'
+require 'vendor/autoload.php';
+$app=require 'bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+[, $id, $action, $userId, $ready, $go]=$argv;
+touch($ready);
+$deadline=microtime(true)+15;
+while(!is_file($go)) { if(microtime(true)>$deadline) { exit(2); } usleep(10000); clearstatcache(true,$go); }
+if($action==='generate') {
+ app(App\Services\PhotoThumbnail::class)->generate((int)$id);
+} else {
+ $photo=App\Models\Photo::findOrFail($id);
+ if(!app(App\Services\PhotoRemoval::class)->remove($photo,(int)$userId)) { exit(3); }
+}
+PHP;
+        $processes = [];
+        try {
+            foreach (['generate', 'delete'] as $action) {
+                $processes[] = new Process([PHP_BINARY, '-d', 'memory_limit=256M', '-r', $script, (string) $photo->id, $action, (string) $collection->user_id, $directory.'/ready-'.$action, $directory.'/go'], base_path(), $environment, null, 25);
+            }
+            DB::disconnect();
+            foreach ($processes as $process) {
+                $process->start();
+            }
+            $deadline = microtime(true) + 15;
+            while (! is_file($directory.'/ready-generate') || ! is_file($directory.'/ready-delete')) {
+                if (microtime(true) > $deadline) {
+                    $this->fail('Thumbnail workers failed to become ready.');
+                }
+                usleep(10000);
+                clearstatcache();
+            }
+            touch($directory.'/go');
+            foreach ($processes as $process) {
+                $process->wait();
+                $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+            }
+            $this->assertDatabaseMissing('photos', ['id' => $photo->id]);
+            $this->assertCount(0, File::allFiles($directory.'/photos'));
+            $this->assertDatabaseHas('audit_events', ['action' => 'photo.deleted', 'resource_id' => $photo->id]);
+        } finally {
+            foreach ($processes as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            }
+            File::deleteDirectory($directory);
+            DB::reconnect();
+        }
     }
 
     private function collection(): UploadSession

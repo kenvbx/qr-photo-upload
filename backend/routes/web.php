@@ -19,6 +19,7 @@ Route::middleware('auth')->group(function () {
     Route::post('/collections/{collection}/photos/selection', [PhotoSelectionController::class, 'store'])->middleware('throttle:photo-selection')->name('photos.selection');
     Route::post('/collections/{collection}/close', [CollectionController::class, 'close'])->name('collections.close');
     Route::get('/photos/{photo}', [PhotoController::class, 'show'])->name('photos.show');
+    Route::get('/photos/{photo}/thumbnail', [PhotoController::class, 'thumbnail'])->name('photos.thumbnail');
     Route::delete('/photos/{photo}', [PhotoController::class, 'destroy'])->name('photos.destroy');
 });
 Route::get('/u/{token}', [GuestUploadController::class, 'show'])->where('token', '[a-f0-9]{64}')->middleware('throttle:guest-view')->name('upload');
