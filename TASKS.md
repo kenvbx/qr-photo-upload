@@ -11,3 +11,7 @@
 Verified 2026-11-11: 17 backend tests (112 assertions), 4 Chromium end-to-end tests. Pending: MySQL concurrency, physical phone, public demo deployment and operational restore drill.
 
 - [x] Guest photo previews, filename/size, keyboard-accessible removal, client validation feedback and browser regression coverage.
+
+- [x] Per-photo transfer/confirmation progress, bounded automatic retry and explicit retry of failed photos.
+- [x] Transactional upload receipts, key-conflict handling, SHA-256 content deduplication and native form compatibility.
+- [x] Add an isolated MySQL CI job and real parallel-process replay/quota tests; confirm its run before marking MySQL verification complete.

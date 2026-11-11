@@ -120,7 +120,7 @@ class PhotoWorkflowTest extends TestCase
         for ($i = 0; $i < 99; $i++) {
             $c->photos()->create(['path' => 'photos/'.$i.'.jpg', 'mime' => 'image/jpeg', 'bytes' => 1, 'width' => 1, 'height' => 1]);
         }
-        $this->upload($c, [UploadedFile::fake()->image('a.jpg'), UploadedFile::fake()->image('b.jpg')])->assertSessionHasErrors('photos');
+        $this->upload($c, [UploadedFile::fake()->image('a.jpg'), UploadedFile::fake()->image('b.jpg', 30, 20)])->assertSessionHasErrors('photos');
         $this->assertEquals(99, $c->photos()->count());
         $this->assertEmpty(Storage::disk('local')->allFiles());
         $this->upload($c)->assertSessionHasNoErrors();
@@ -174,7 +174,7 @@ class PhotoWorkflowTest extends TestCase
         }, $storage);
         $this->withoutExceptionHandling();
         try {
-            $this->upload($c, [UploadedFile::fake()->image('a.jpg'), UploadedFile::fake()->image('b.jpg')]);
+            $this->upload($c, [UploadedFile::fake()->image('a.jpg'), UploadedFile::fake()->image('b.jpg', 30, 20)]);
             $this->fail('Expected failure');
         } catch (\RuntimeException $e) {
             $this->assertSame('Disk unavailable', $e->getMessage());

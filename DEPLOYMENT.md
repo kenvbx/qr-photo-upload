@@ -8,7 +8,7 @@
 4. Set PHP `upload_max_filesize=10M`, `post_max_size=110M`, `max_file_uploads=10`, `memory_limit=256M` or higher; proxy body limit at least 110 MB and a suitable bounded upload timeout. Laravel validation still enforces limits.
 5. Back up before migrations; run `php artisan migrate --force`, `php artisan config:cache`, `php artisan route:cache`, `php artisan view:cache`. Create an admin interactively with `php artisan admin:create organizer@your-domain`.
 6. Probe `/up`, then sign in, create a collection, scan a real phone on HTTPS, upload JPEG/PNG/WebP, confirm guest cannot browse images, download/delete, close the session, and verify an expired link rejects uploads.
-7. Run MySQL feature tests and a parallel upload/close/quota test against a disposable database before claiming concurrent correctness. SQLite tests cannot prove InnoDB row locking. Do not point automated tests at a live database.
+7. Confirm the dedicated MySQL CI job passes the full suite, including parallel replay and final-slot quota races. Run a parallel upload/close smoke check against a disposable staging database before production. SQLite tests cannot prove InnoDB row locking. Do not point automated tests at a live database.
 
 ## Operations
 
@@ -21,3 +21,9 @@ Session expiry does not delete photos. Set a retention and storage quota policy 
 Take a consistent snapshot of MySQL plus `storage/app/private` and preserve the application key separately. During restore, put the app in maintenance mode, restore the matching DB/files pair, set private permissions, clear caches, and smoke-test owner downloads and blocked guest gallery access. Test a restore before promising recovery objectives. No automated backup or restore drill is provided in this MVP.
 
 For rollback, retain the previous code release and a pre-migration snapshot. Restore code compatible with the current schema; if it is incompatible, restore the matching DB/files snapshot during maintenance. Avoid automatically running destructive down-migrations. A crash during upload/deletion can leave DB/file mismatches: reconcile against metadata, quarantine orphan files, and restore missing files from backup. No RPO/RTO guarantees are claimed.
+
+## Reliability upgrade
+
+Back up the database/private disk before `php artisan migrate --force`. This release adds unique photo content hashes and upload receipts without removing existing data. Readable old photos are hashed lazily during the next active upload; first-use latency may rise with the old collection size. Existing duplicate files are preserved. Do not prune receipts independently while a collection may still need retries: receipt retention is what prevents a completed request from resurrecting an admin-deleted photo. Native forms and JSON clients both support upload IDs; JSON clients require one. Do not log photo content or bearer URLs when diagnosing network failures.
+
+Smoke test real transfer progress, retry after loss of a response following commit, identical-byte duplicate selection, retry cooldown, expired CSRF, closure, and confirmation counts. Browser retries are per whole file and limited automatically; do not add proxy retries for non-idempotent uploads that omit an upload key. Keep retention/reconciliation and the separate private-file backup plan in place.

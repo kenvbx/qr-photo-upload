@@ -1,12 +1,22 @@
 import { test, expect } from '@playwright/test';
 import { PNG } from 'pngjs';
 import jsQR from 'jsqr';
+let organizerCookies = [];
 async function login(page) {
+ if (organizerCookies.length) {
+  await page.context().addCookies(organizerCookies);
+  await page.goto('/');
+  if (new URL(page.url()).pathname === '/') {
+   await expect(page.getByRole('heading', { name: 'Your collections.' })).toBeVisible();
+   return;
+  }
+ }
  await page.goto('/login');
  await page.getByLabel('Email address').fill('organizer@example.test');
  await page.getByLabel('Password', { exact: true }).fill('local-demo-photos-2026');
  await page.getByRole('button', { name: 'Sign in to workspace' }).click();
  await expect(page.getByRole('heading', { name: 'Your collections.' })).toBeVisible();
+ organizerCookies = await page.context().cookies();
 }
 test('QR decodes to real guest link; upload, private gallery, download, delete and expiry', async ({ page, browser }) => {
  await login(page);
@@ -106,8 +116,8 @@ test('guest previews photos locally, removes a file with keyboard and uploads on
  await guest.setViewportSize({ width: 1440, height: 1000 });
  await guest.screenshot({ path: 'screenshots/upload-preview-desktop.png', fullPage: true });
  await guest.getByRole('button', { name: 'Upload photos' }).click();
- await expect(guest.getByRole('status').filter({ hasText: 'Thank you! 2 photo(s)' })).toBeVisible();
- expect(uploadRequests).toHaveLength(1);
+ await expect(guest.getByRole('status').filter({ hasText: 'Thank you! 2 photo(s) confirmed' })).toBeVisible();
+ expect(uploadRequests).toHaveLength(2);
  await page.getByRole('link', { name: 'Refresh gallery' }).click();
  await expect(page.locator('.photo-card')).toHaveCount(2);
  const saved = [];
@@ -157,5 +167,152 @@ test('preview selection can recover from too many, oversized, unsupported and co
  await expect(guest.locator('.upload-preview')).toHaveCount(1);
  await expect(guest.getByText('replacement.png', { exact: true })).toBeVisible();
  expect(await photos.evaluate(input => input.validity.valid)).toBe(true);
+ await context.close();
+});
+
+test('real per-photo progress waits for confirmation; retry after lost responses preserves successful photos', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Safe retries');
+ const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+ const guest = await context.newPage();
+ const errors = [];
+ guest.on('pageerror', error => errors.push(error.message));
+ await guest.goto(url);
+ let releaseFirst;
+ let firstAccepted;
+ const accepted = new Promise(resolve => { firstAccepted = resolve; });
+ const release = new Promise(resolve => { releaseFirst = resolve; });
+ const results = [];
+ let requests = 0;
+ const network = await context.newCDPSession(guest);
+ await network.send('Fetch.enable', { patterns: [{ urlPattern: url, requestStage: 'Response' }] });
+ network.on('Fetch.requestPaused', async event => {
+  if (event.request.method !== 'POST') return network.send('Fetch.continueRequest', { requestId: event.requestId });
+  const attempt = ++requests;
+  expect(event.responseStatusCode).toBe(200);
+  const response = await network.send('Fetch.getResponseBody', { requestId: event.requestId });
+  const bytes = Buffer.from(response.body, response.base64Encoded ? 'base64' : 'utf8');
+  results.push(JSON.parse(bytes.toString()).data);
+  if (attempt === 1) { firstAccepted(); await release; }
+  if (attempt <= 2) return network.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'ConnectionReset' });
+  return network.send('Fetch.fulfillRequest', { requestId: event.requestId, responseCode: event.responseStatusCode, responseHeaders: event.responseHeaders, body: bytes.toString('base64') });
+ });
+ await guest.locator('input[type=file]').setInputFiles([previewImage('retry-me.png'), previewImage('keep-success.png', [150, 80, 55])]);
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await accepted;
+ const retryCard = guest.locator('.upload-preview').filter({ has: guest.getByText('retry-me.png', { exact: true }) });
+ await expect(retryCard.getByText('Sent · confirming with server…')).toBeVisible();
+ await expect(guest.getByRole('button', { name: 'Uploading…' })).toBeDisabled();
+ await expect(retryCard.getByRole('progressbar')).toHaveJSProperty('value', 100);
+ await expect(guest.locator('.upload-total-label')).toContainText('0 of 2 photos confirmed');
+ releaseFirst();
+ await expect(guest.getByRole('status').filter({ hasText: '1 failed' })).toBeVisible();
+ expect(requests).toBe(3);
+ expect(results[0]).toEqual({ uploaded: 1, duplicates: 0, replayed: false });
+ expect(results[1]).toEqual({ uploaded: 1, duplicates: 0, replayed: true });
+ await expect(retryCard.getByRole('button', { name: 'Retry photo retry-me.png' })).toBeEnabled();
+ await guest.screenshot({ path: 'screenshots/upload-retry-mobile.png', fullPage: true });
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(2);
+ await guest.getByRole('button', { name: 'Retry failed photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: 'Thank you! 2 photo(s) confirmed' })).toBeVisible();
+ await expect(retryCard.getByText('Upload confirmed · safely retried')).toBeVisible();
+ expect(requests).toBe(4);
+ expect(results[3]).toEqual({ uploaded: 1, duplicates: 0, replayed: true });
+ await expect(guest.getByRole('progressbar', { name: 'Overall upload progress' })).toHaveJSProperty('value', 100);
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(2);
+ expect(errors).toEqual([]);
+ await context.close();
+});
+
+test('network failure before receipt can be retried and selecting the same bytes again does not duplicate photos', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Network recovery');
+ const context = await browser.newContext();
+ const guest = await context.newPage();
+ await guest.goto(url);
+ let blocked = true;
+ let requests = 0;
+ await guest.route(url, async route => {
+  if (route.request().method() !== 'POST') return route.continue();
+  requests++;
+  if (blocked) return route.abort('internetdisconnected');
+  return route.continue();
+ });
+ const photo = previewImage('offline.png');
+ await guest.locator('input[type=file]').setInputFiles(photo);
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: '1 failed' })).toBeVisible();
+ expect(requests).toBe(2);
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(0);
+ blocked = false;
+ await guest.getByRole('button', { name: 'Retry photo offline.png', exact: true }).click();
+ await expect(guest.getByRole('status').filter({ hasText: 'Thank you! 1 photo(s) confirmed' })).toBeVisible();
+ expect(requests).toBe(3);
+ await guest.locator('input[type=file]').setInputFiles({ ...photo, name: 'same-photo-renamed.png' });
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByText('Already uploaded · no duplicate saved', { exact: true })).toBeVisible();
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(1);
+ await context.close();
+});
+
+test('rate limit cooldown is respected and a closed collection stops pending photos', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Upload failure states');
+ const context = await browser.newContext();
+ const guest = await context.newPage();
+ await guest.clock.install();
+ await guest.goto(url);
+ let requests = 0;
+ await guest.route(url, route => {
+  if (route.request().method() !== 'POST') return route.continue();
+  requests++;
+  return route.fulfill({ status: requests === 1 ? 429 : 410, contentType: 'application/json', headers: { 'Retry-After': '1' }, body: JSON.stringify({ message: 'Unavailable' }) });
+ });
+ await guest.locator('input[type=file]').setInputFiles(previewImage('limited.png'));
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByText('Too many uploads. Retry after 1 second.')).toBeVisible();
+ await expect(guest.getByRole('button', { name: 'Retry failed photos' })).toBeDisabled();
+ expect(requests).toBe(1);
+ await guest.clock.fastForward(1100);
+ await expect(guest.getByRole('button', { name: 'Retry failed photos' })).toBeEnabled();
+ await guest.locator('input[type=file]').setInputFiles([previewImage('closed.png'), previewImage('pending.png', [110, 55, 75])]);
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: '2 failed' })).toBeVisible();
+ expect(requests).toBe(2);
+ await expect(guest.getByRole('button', { name: 'Retry failed photos' })).toBeHidden();
+ await expect(guest.getByText('This upload link has expired or closed.', { exact: true })).toHaveCount(2);
+ await context.close();
+});
+
+test('server rejects invalid dimensions without retrying while other valid photos finish', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Validation recovery');
+ const context = await browser.newContext();
+ const guest = await context.newPage();
+ await guest.goto(url);
+ const image = new PNG({ width: 12001, height: 1 });
+ image.data.fill(100);
+ await guest.locator('input[type=file]').setInputFiles([
+  { name: 'too-wide.png', mimeType: 'image/png', buffer: PNG.sync.write(image) }, previewImage('accepted.png')
+ ]);
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: '1 failed' })).toBeVisible();
+ await expect(guest.getByText('Use valid JPEG, PNG or WebP images, up to 20 megapixels and 12,000 pixels per side.', { exact: true })).toBeVisible();
+ await expect(guest.getByRole('button', { name: 'Retry failed photos' })).toBeHidden();
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(1);
+ await context.close();
+});
+
+test('native form fallback uploads with a receipt when JavaScript is disabled', async ({ page, browser }) => {
+ const url = await createPreviewCollection(page, 'Native upload');
+ const context = await browser.newContext({ javaScriptEnabled: false });
+ const guest = await context.newPage();
+ await guest.goto(url);
+ await guest.locator('input[type=file]').setInputFiles(previewImage('native.png'));
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.getByRole('status').filter({ hasText: 'Thank you! 1 photo(s) uploaded successfully.' })).toBeVisible();
+ await page.getByRole('link', { name: 'Refresh gallery' }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(1);
  await context.close();
 });

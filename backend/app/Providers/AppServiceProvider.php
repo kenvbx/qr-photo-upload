@@ -16,6 +16,6 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('login', fn (Request $r) => Limit::perMinute(5)->by($r->ip()));
         RateLimiter::for('collection-create', fn (Request $r) => Limit::perMinute(20)->by($r->user()->id));
         RateLimiter::for('guest-view', fn (Request $r) => Limit::perMinute(60)->by($r->ip()));
-        RateLimiter::for('guest-upload', fn (Request $r) => Limit::perMinute(10)->by($r->ip()));
+        RateLimiter::for('guest-upload', fn (Request $r) => Limit::perMinute(60)->by($r->ip()));
     }
 }
