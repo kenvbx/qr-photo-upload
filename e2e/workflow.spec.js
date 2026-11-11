@@ -54,6 +54,7 @@ test('QR decodes to real guest link; upload, private gallery, download, delete a
  await photo.getByRole('button', { name: 'Delete', exact: true }).click();
  await expect(page.getByRole('heading', { name: 'Ready for the first photo' })).toBeVisible();
  await page.getByRole('button', { name: 'Close upload link' }).click();
+ await expect(page.locator('.page-heading .badge')).toHaveText('Closed');
  const closed = await guest.goto(url);
  expect(closed.status()).toBe(410);
  await expect(guest.getByRole('heading', { name: 'Uploads are closed.' })).toBeVisible();
