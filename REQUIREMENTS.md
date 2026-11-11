@@ -2,6 +2,7 @@
 
 - Admin signs in with configured credentials; wrong credentials are rejected and login attempts rate-limited. Session ID regenerates on login; logout invalidates it. No public registration.
 - Admin creates a named collection with expiry between 1 hour and 7 days, sees a QR code and copyable URL, and can close collection immediately.
+- Before uploading, a guest sees local thumbnails, filenames and sizes, can remove individual photos with touch or keyboard, and sees selected count/total size. Removed files are excluded from the actual upload. Invalid/oversized images show actionable errors. Choosing again replaces the selection; removing all restores the required-file state. Previews never trigger an upload.
 - A guest opens a valid active URL and sees the title, limits and a multiple-file input. Guest never sees existing photos or admin data.
 - Backend accepts JPEG/PNG/WebP that decode as images, validates actual content, dimensions, individual size (10 MB), batch count (10) and collection count (100). SVG, malformed files, inactive sessions and over-quota requests fail clearly.
 - Random 256-bit upload tokens are unguessable and redacted from application audit records. Gallery/download/delete routes require an authenticated collection owner. UUID storage names ignore user-supplied paths.

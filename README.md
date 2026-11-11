@@ -7,6 +7,7 @@
 - Organizer login and logout; per-owner collections and private gallery.
 - Create upload collections with 1-hour to 7-day expiry and immediate closure.
 - Server-generated SVG QR codes and copyable guest URLs.
+- Local photo previews with thumbnail, filename and size; remove individual photos before upload. File selection stays on-device until submission. Choosing files again replaces the pending selection.
 - Multiple JPEG/PNG/WebP uploads: 10 MB each, 10 per request, 100 per collection; actual MIME, image decoding and pixel bounds (20 MP / 12,000 pixels per side).
 - Random private file paths; authorized image display, original download and deletion.
 - Server-side ownership, CSRF, named rate limits, audit events and upload failure compensation.
@@ -48,7 +49,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Verified locally on 2026-11-11: 17 PHP tests / 112 assertions and 2 Chromium tests. Browser tests decode the rendered QR and use its real URL, upload bytes over HTTP, check private gallery access, original download, delete, closure, CSRF rejection and mobile layout. Fixtures use a separate `e2e.sqlite` database and private test storage. Screenshots are generated under `screenshots/`; the gallery screenshot contains a small synthetic test image.
+Verified locally on 2026-11-11: 17 PHP tests / 112 assertions and 4 Chromium tests. Browser tests decode the rendered QR and use its real URL, upload bytes over HTTP, check private gallery access, original download, delete, closure, CSRF rejection and mobile layout. Preview tests cover keyboard removal, unchanged original bytes for retained photos, no upload before submission, invalid files and selection recovery. Fixtures use a separate `e2e.sqlite` database and private test storage. Screenshots are generated under `screenshots/`; the gallery screenshot contains a small synthetic test image.
 
 ## Documentation
 
