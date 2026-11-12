@@ -9,7 +9,7 @@
 - [x] Verify MySQL concurrency with real parallel uploads in CI.
 - [ ] Deploy a demo when requested/configured.
 
-Verified locally 2026-11-12: 82 backend tests on SQLite (802 assertions; 6 MySQL-only tests skipped), and 20 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
+Verified locally 2026-11-12: 83 backend tests on SQLite (806 assertions; 6 MySQL-only tests skipped), and 20 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
 
 - [x] Guest photo previews, filename/size, keyboard-accessible removal, client validation feedback and browser regression coverage.
 
