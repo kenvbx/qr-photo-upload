@@ -23,6 +23,15 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      - name: Upload browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-failure-diagnostics
+          path: |
+            backend/storage/logs/*.log
+            test-results/
+          retention-days: 3
   mysql:
     runs-on: ubuntu-latest
     services:
