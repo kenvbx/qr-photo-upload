@@ -16,10 +16,12 @@ class PrunePhotos extends Command
     {
         $failed = 0;
         $removed = 0;
-        Photo::whereNotNull('delete_after')->where('delete_after', '<=', now())->with('uploadSession')->chunkById(100, function ($photos) use ($removal, &$failed, &$removed) {
+        Photo::withTrashed()->where(function ($query) {
+            $query->where('delete_after', '<=', now())->orWhere('deleted_at', '<=', now()->subDays(30));
+        })->with('uploadSession')->chunkById(100, function ($photos) use ($removal, &$failed, &$removed) {
             foreach ($photos as $photo) {
                 try {
-                    if ($removal->remove($photo, $photo->uploadSession->user_id)) {
+                    if ($removal->remove($photo, $photo->uploadSession->user_id, false, true)) {
                         $removed++;
                     } else {
                         $failed++;

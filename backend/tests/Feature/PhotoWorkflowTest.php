@@ -153,8 +153,9 @@ class PhotoWorkflowTest extends TestCase
         $this->get('/photos/'.$photo->id)->assertOk()->assertHeader('Content-Type', 'image/jpeg')->assertHeader('X-Content-Type-Options', 'nosniff');
         $this->get('/photos/'.$photo->id.'?download=1')->assertOk()->assertDownload('photo-'.$photo->id.'.jpg');
         $this->delete('/photos/'.$photo->id)->assertRedirect();
-        Storage::disk('local')->assertMissing($photo->path);
-        $this->assertDatabaseCount('photos', 0);
+        Storage::disk('local')->assertExists($photo->path);
+        $this->assertSoftDeleted($photo);
+        $this->assertSame(0, $c->photos()->count());
         $this->post('/collections/'.$c->id.'/close')->assertRedirect();
         $this->assertNotNull($c->fresh()->closed_at);
         $this->upload($c)->assertStatus(410);

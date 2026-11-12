@@ -143,6 +143,7 @@ class PhotoThumbnailTest extends TestCase
                 app(PhotoThumbnail::class)->generate($photo->id);
             }
             $this->post(route('photos.selection', $collection), ['action' => 'delete', 'photos' => [$photo->id]])->assertRedirect();
+            $this->delete(route('trash.purge', $photo->id))->assertRedirect();
             (new GeneratePhotoThumbnail($photo->id))->handle(app(PhotoThumbnail::class));
             Storage::disk('local')->assertMissing([$photo->path, $photo->thumbnailFile()]);
             $this->assertDatabaseMissing('photos', ['id' => $photo->id]);
@@ -299,11 +300,12 @@ class PhotoThumbnailTest extends TestCase
         Storage::fake('local');
         $photo = $this->photo($this->collection());
         app(PhotoThumbnail::class)->generate($photo->id);
+        $photo->delete();
         $disk = Storage::disk('local');
         $mock = \Mockery::mock($disk)->makePartial();
         $mock->shouldReceive('delete')->with($photo->thumbnailFile())->once()->andReturnFalse();
         Storage::shouldReceive('disk')->with('local')->andReturn($mock);
-        $this->actingAs(User::findOrFail($photo->uploadSession->user_id))->delete(route('photos.destroy', $photo))->assertStatus(503);
+        $this->actingAs(User::findOrFail($photo->uploadSession->user_id))->delete(route('trash.purge', $photo->id))->assertStatus(503);
         $this->assertDatabaseHas('photos', ['id' => $photo->id]);
         $disk->assertExists([$photo->path, $photo->thumbnailFile()]);
     }

@@ -213,6 +213,7 @@ class CollectionUpgradesTest extends TestCase
         $this->assertSame($cloud->get($photo->path), $archive['photo-'.$photo->id.'.jpg']->getContent());
         $this->assertSame([], $manager->disk('local')->allDirectories('exports'));
         $this->delete('/photos/'.$photo->id)->assertRedirect();
+        $this->delete(route('trash.purge', $photo->id))->assertRedirect();
         $cloud->assertMissing([$photo->path, $photo->thumbnailFile()]);
         $this->assertSame(1, $c->photos()->count());
         Storage::swap($manager);

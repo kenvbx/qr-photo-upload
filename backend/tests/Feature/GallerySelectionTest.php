@@ -7,6 +7,7 @@ use App\Models\PhotoExport;
 use App\Models\UploadSession;
 use App\Models\User;
 use App\Services\PhotoExportBuilder;
+use App\Services\PhotoRemoval;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use PharData;
@@ -66,12 +67,14 @@ class GallerySelectionTest extends TestCase
         $second = $this->photo($collection);
         $retained = $this->photo($collection);
         $this->actingAs(User::findOrFail($collection->user_id))->post(route('photos.selection', $collection), ['action' => 'delete', 'photos' => [$first->id, $second->id]])
-            ->assertRedirect(route('collections.show', $collection))->assertSessionHas('status', '2 photos deleted.');
-        Storage::disk('local')->assertMissing([$first->path, $second->path]);
+            ->assertRedirect(route('collections.show', $collection))->assertSessionHas('status', '2 photos moved to trash.');
+        Storage::disk('local')->assertExists([$first->path, $second->path]);
         Storage::disk('local')->assertExists($retained->path);
-        $this->assertDatabaseCount('photos', 1);
+        $this->assertSame(1, $collection->photos()->count());
+        $this->assertSoftDeleted($first);
+        $this->assertSoftDeleted($second);
         foreach ([$first, $second] as $photo) {
-            $this->assertDatabaseHas('audit_events', ['action' => 'photo.deleted', 'resource_id' => $photo->id, 'user_id' => $collection->user_id]);
+            $this->assertDatabaseHas('audit_events', ['action' => 'photo.trashed', 'resource_id' => $photo->id, 'user_id' => $collection->user_id]);
         }
     }
 
@@ -138,14 +141,15 @@ class GallerySelectionTest extends TestCase
         $failed = $this->photo($collection);
         $success = $this->photo($collection);
         $disk = Storage::disk('local');
-        $mock = \Mockery::mock($disk)->makePartial();
-        $mock->shouldReceive('delete')->with($failed->path)->once()->andReturnFalse();
-        $mock->shouldReceive('delete')->with($success->path)->once()->andReturnUsing(fn ($path) => $disk->delete($path));
-        Storage::shouldReceive('disk')->with('local')->andReturn($mock);
+        $real = new PhotoRemoval;
+        $this->mock(PhotoRemoval::class, function ($mock) use ($failed, $success, $real, $collection) {
+            $mock->shouldReceive('trash')->with(\Mockery::on(fn ($photo) => $photo->id === $failed->id), $collection->user_id)->once()->andReturnFalse();
+            $mock->shouldReceive('trash')->with(\Mockery::on(fn ($photo) => $photo->id === $success->id), $collection->user_id)->once()->andReturnUsing(fn ($photo, $owner) => $real->trash($photo, $owner));
+        });
         $this->actingAs(User::findOrFail($collection->user_id))->post(route('photos.selection', $collection), ['action' => 'delete', 'photos' => [$failed->id, $success->id]])
-            ->assertRedirect(route('collections.show', $collection))->assertSessionHas('status', '1 photo deleted.')->assertSessionHasErrors('photos');
+            ->assertRedirect(route('collections.show', $collection))->assertSessionHas('status', '1 photo moved to trash.')->assertSessionHasErrors('photos');
         $this->assertDatabaseHas('photos', ['id' => $failed->id]);
-        $this->assertDatabaseMissing('photos', ['id' => $success->id]);
+        $this->assertSoftDeleted($success);
         $this->assertDatabaseCount('audit_events', 1);
         $disk->assertExists($failed->path);
     }

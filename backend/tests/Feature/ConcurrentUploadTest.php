@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\ResumableUpload;
 use App\Models\UploadSession;
 use App\Models\User;
 use Illuminate\Foundation\Testing\DatabaseMigrations;
@@ -181,6 +182,72 @@ PHP;
                 }
             }
             File::deleteDirectory($directory);
+            DB::reconnect();
+        }
+    }
+
+    public function test_mysql_concurrent_resumable_finish_publishes_one_photo_and_job(): void
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            $this->markTestSkipped('Requires an isolated MySQL test database.');
+        }
+        $collection = $this->collection();
+        $id = (string) Str::uuid();
+        $directory = sys_get_temp_dir().'/qr-resume-race-'.Str::uuid();
+        File::makeDirectory($directory.'/photos/resumable', 0700, true);
+        $source = UploadedFile::fake()->image('source.png', 400, 300);
+        File::copy($source->getRealPath(), $directory.'/photos/resumable/'.$id.'.part');
+        ResumableUpload::create(['id' => $id, 'upload_session_id' => $collection->id, 'secret_hash' => hash('sha256', str_repeat('a', 64)), 'name' => 'source.png', 'mime' => 'image/png', 'bytes' => $source->getSize(), 'offset' => $source->getSize(), 'sha256' => hash_file('sha256', $source->getRealPath()), 'expires_at' => now()->addDay()]);
+        $database = config('database.connections.mysql');
+        $environment = ['APP_ENV' => 'testing', 'DB_URL' => '', 'DB_CONNECTION' => 'mysql', 'DB_HOST' => $database['host'], 'DB_PORT' => (string) $database['port'], 'DB_DATABASE' => $database['database'], 'DB_USERNAME' => $database['username'], 'DB_PASSWORD' => $database['password'], 'PRIVATE_STORAGE_ROOT' => $directory.'/photos'];
+        $script = <<<'PHP_SCRIPT'
+require 'vendor/autoload.php';
+$app=require 'bootstrap/app.php';
+$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
+[, $token, $id, $ready, $go]=$argv;
+$request=Illuminate\Http\Request::create('/resume','POST');
+$request->headers->set('X-Upload-Secret',str_repeat('a',64));
+$request->setLaravelSession(new Illuminate\Session\Store('test',new Illuminate\Session\ArraySessionHandler(120)));
+touch($ready); $deadline=microtime(true)+15;
+while(!is_file($go)) { if(microtime(true)>$deadline) { exit(2); } usleep(10000); clearstatcache(true,$go); }
+$response=app(App\Http\Controllers\ResumableUploadController::class)->finish($request,$token,$id,app(App\Services\PhotoUpload::class));
+echo $response->getContent();
+PHP_SCRIPT;
+        $processes = [];
+        try {
+            foreach ([0, 1] as $index) {
+                $processes[] = new Process([PHP_BINARY, '-r', $script, $collection->token, $id, $directory.'/ready-'.$index, $directory.'/go'], base_path(), $environment, null, 25);
+            }
+            DB::disconnect();
+            foreach ($processes as $process) {
+                $process->start();
+            }
+            $deadline = microtime(true) + 15;
+            while (! is_file($directory.'/ready-0') || ! is_file($directory.'/ready-1')) {
+                if (microtime(true) > $deadline) {
+                    $this->fail('Resumable workers failed to become ready.');
+                } usleep(10000);
+                clearstatcache();
+            }
+            touch($directory.'/go');
+            foreach ($processes as $process) {
+                $process->wait();
+                $this->assertTrue($process->isSuccessful(), $process->getErrorOutput());
+                $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+                $this->assertSame(1, $result['data']['uploaded']);
+            }
+            DB::reconnect();
+            $this->assertDatabaseCount('photos', 1);
+            $this->assertDatabaseCount('jobs', 1);
+            $this->assertDatabaseCount('upload_receipts', 1);
+            $this->assertFileDoesNotExist($directory.'/photos/resumable/'.$id.'.part');
+            $this->assertCount(1, File::allFiles($directory.'/photos/photos'));
+        } finally {
+            foreach ($processes as $process) {
+                if ($process->isRunning()) {
+                    $process->stop();
+                }
+            } File::deleteDirectory($directory);
             DB::reconnect();
         }
     }

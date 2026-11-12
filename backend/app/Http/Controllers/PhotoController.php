@@ -37,8 +37,8 @@ class PhotoController extends Controller
     public function destroy(Request $r, Photo $photo, PhotoRemoval $removal)
     {
         abort_unless($photo->uploadSession->user_id === $r->user()->id, 404);
-        abort_unless($removal->remove($photo, $r->user()->id), 503, 'Unable to remove the photo. Please retry.');
+        abort_unless($removal->trash($photo, $r->user()->id), 503, 'Unable to remove the photo. Please retry.');
 
-        return redirect()->route('collections.show', $photo->upload_session_id)->with('status', 'Photo deleted.');
+        return redirect()->route('collections.show', $photo->upload_session_id)->with('status', 'Photo moved to trash. You can restore it for up to 30 days.');
     }
 }

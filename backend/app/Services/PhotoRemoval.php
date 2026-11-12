@@ -8,11 +8,28 @@ use Illuminate\Support\Facades\Storage;
 
 class PhotoRemoval
 {
-    public function remove(Photo $photo, int $userId): bool
+    public function trash(Photo $photo, int $userId): bool
     {
         return DB::transaction(function () use ($photo, $userId) {
             $locked = Photo::lockForMutation($photo->id);
             if (! $locked) {
+                return false;
+            }
+            $locked->delete();
+            DB::table('audit_events')->insert(['user_id' => $userId, 'action' => 'photo.trashed', 'resource_id' => $locked->id, 'created_at' => now()]);
+
+            return true;
+        });
+    }
+
+    public function remove(Photo $photo, int $userId, bool $onlyTrashed = false, bool $onlyDue = false): bool
+    {
+        return DB::transaction(function () use ($photo, $userId, $onlyTrashed, $onlyDue) {
+            $locked = Photo::lockForMutation($photo->id, true);
+            if (! $locked) {
+                return false;
+            }
+            if (($onlyTrashed && ! $locked->trashed()) || ($onlyDue && ! ($locked->delete_after?->lte(now()) || $locked->deleted_at?->lte(now()->subDays(30))))) {
                 return false;
             }
             $disk = Storage::disk($locked->disk);
@@ -25,7 +42,7 @@ class PhotoRemoval
                 return false;
             }
             DB::table('audit_events')->insert(['user_id' => $userId, 'action' => 'photo.deleted', 'resource_id' => $locked->id, 'created_at' => now()]);
-            $locked->delete();
+            $locked->forceDelete();
 
             return true;
         });

@@ -40,8 +40,11 @@ class CollectionController extends Controller
     public function show(Request $r, UploadSession $collection)
     {
         abort_unless($collection->user_id === $r->user()->id, 404);
-        $filters = $r->validate(['q' => ['nullable', 'string', 'max:120'], 'type' => ['nullable', Rule::in(['jpeg', 'png', 'webp'])], 'sort' => ['nullable', Rule::in(['newest', 'oldest', 'largest', 'smallest'])]]);
+        $filters = $r->validate(['q' => ['nullable', 'string', 'max:120'], 'type' => ['nullable', Rule::in(['jpeg', 'png', 'webp'])], 'moderation' => ['nullable', Rule::in(['pending', 'approved', 'rejected'])], 'sort' => ['nullable', Rule::in(['newest', 'oldest', 'largest', 'smallest'])]]);
         $query = $collection->photos();
+        if ($state = $filters['moderation'] ?? null) {
+            $query->where('moderation_status', $state);
+        }
         if (($search = $filters['q'] ?? '') !== '') {
             $query->where(function ($query) use ($search) {
                 $query->whereRaw("original_name LIKE ? ESCAPE '!'", ['%'.str_replace(['!', '%', '_'], ['!!', '!%', '!_'], $search).'%']);
@@ -60,7 +63,7 @@ class CollectionController extends Controller
             default => $query->latest()->latest('id'),
         };
         $photos = $query->paginate(24)->withQueryString();
-        $usage = (int) $collection->photos()->sum('bytes');
+        $usage = (int) $collection->photos()->withTrashed()->sum('bytes');
         if ($r->expectsJson()) {
             $exports = PhotoExport::where('upload_session_id', $collection->id)->latest()->limit(5)->get();
             $html = view('collection-gallery', compact('collection', 'photos', 'exports'))->render();
@@ -89,7 +92,7 @@ class CollectionController extends Controller
                 DB::table('upload_sessions')->where('id', $collection->id)->update(['id' => DB::raw('id')]);
             }
             $locked = UploadSession::lockForUpdate()->findOrFail($collection->id);
-            if ($locked->photos()->sum('bytes') > $data['quota_mb'] * 1048576) {
+            if ($locked->photos()->withTrashed()->sum('bytes') > $data['quota_mb'] * 1048576) {
                 throw ValidationException::withMessages(['quota_mb' => 'Quota cannot be lower than current usage.']);
             }
             $values = ['quota_bytes' => $data['quota_mb'] * 1048576, 'retention_days' => $data['retention_days'] ?? null];
@@ -102,7 +105,7 @@ class CollectionController extends Controller
             DB::table('audit_events')->insert(['user_id' => $r->user()->id, 'action' => 'collection.settings_updated', 'resource_id' => $locked->id, 'created_at' => now()]);
         });
 
-        return back()->with('status', 'Settings saved. Retention applies to future uploads only; existing deadlines are unchanged.');
+        return redirect()->route('collections.show', $collection)->with('status', 'Settings saved. Retention applies to future uploads only; existing deadlines are unchanged.');
     }
 
     public function close(Request $r, UploadSession $collection)

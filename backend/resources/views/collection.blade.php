@@ -2,9 +2,11 @@
 @section('title',$collection->title)
 @section('content')
 <nav class="crumb"><a href="{{ route('dashboard') }}">Collections</a><span>/</span>{{ $collection->title }}</nav><div class="page-heading"><div><span class="badge {{ $collection->active()?'active':'' }}">{{ $collection->closed_at ? 'Closed' : ($collection->active() ? 'Accepting photos' : 'Expired') }}</span><h1>{{ $collection->title }}</h1><p class="lead"><span data-photo-count>{{ $collection->photos()->count() }}</span> of 100 photos · Uploads expire {{ $collection->expires_at->format('M j, Y · H:i') }} UTC</p></div><a class="secondary" href="{{ route('collections.show',$collection) }}">Refresh gallery</a></div>
+<p><a class="secondary" href="{{ route('trash.index',$collection) }}">Open trash ({{ $collection->photos()->onlyTrashed()->count() }})</a></p>
 <form class="gallery-filters panel" method="get" aria-label="Filter gallery">
 <label>Search name or photo ID<input name="q" maxlength="120" value="{{ request('q') }}" type="search"></label>
 <label>File type<select name="type"><option value="">All types</option>@foreach(['jpeg' => 'JPEG', 'png' => 'PNG', 'webp' => 'WebP'] as $value => $label)<option value="{{ $value }}" @selected(request('type') === $value)>{{ $label }}</option>@endforeach</select></label>
+<label>Review status<select name="moderation"><option value="">All photos</option>@foreach(['pending' => 'Needs review', 'approved' => 'Approved', 'rejected' => 'Rejected'] as $value => $label)<option value="{{ $value }}" @selected(request('moderation') === $value)>{{ $label }}</option>@endforeach</select></label>
 <label>Sort<select name="sort">@foreach(['newest' => 'Newest first', 'oldest' => 'Oldest first', 'largest' => 'Largest first', 'smallest' => 'Smallest first'] as $value => $label)<option value="{{ $value }}" @selected(request('sort', 'newest') === $value)>{{ $label }}</option>@endforeach</select></label><button class="secondary">Apply filters</button><a href="{{ route('collections.show', $collection) }}">Reset</a>
 </form><p class="hint" role="status" data-live-status>Gallery updates automatically.</p>
 <div class="workspace-grid"><section data-gallery data-live-content data-live-url="{{ request()->fullUrl() }}">
@@ -14,5 +16,5 @@
 <label for="quota">Storage limit (MB)</label><input id="quota" type="number" name="quota_mb" min="1" max="1000" required value="{{ (int) ($collection->quota_bytes / 1048576) }}">
 <label for="retention">Auto-delete future uploads after (days)</label><input id="retention" type="number" name="retention_days" min="1" max="365" value="{{ $collection->retention_days }}"><p class="hint">Leave empty to keep future photos. Each new photo gets a fixed deletion deadline; changing this setting does not change existing photos.</p>
 <label for="upload-password">{{ $collection->password_hash ? 'Change upload password' : 'Set upload password' }}</label><input id="upload-password" type="password" name="password" minlength="8" maxlength="128" autocomplete="new-password"><p class="hint">Leave blank to keep the current password. Guests must unlock again after a change.</p>@if($collection->password_hash)<label class="checkbox-label"><input type="checkbox" name="remove_password" value="1"> Remove password protection</label>@endif
-<button class="primary full">Save settings</button></form></section></aside></div>
+<button class="primary full">Save settings</button></form></section>@include('event-settings')</aside></div>
 @endsection

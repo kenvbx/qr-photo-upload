@@ -18,6 +18,25 @@ document.querySelectorAll('[data-copy]').forEach(button => {
   });
 });
 
+async function savedUploadStore(mode, operation) {
+  const database = await new Promise((resolve, reject) => {
+    const request = indexedDB.open('gather-saved-uploads', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('uploads', { keyPath: 'key' });
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => reject(new Error('Saved uploads are busy in another tab.'));
+  });
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction('uploads', mode);
+      const request = operation(transaction.objectStore('uploads'));
+      transaction.oncomplete = () => resolve(request.result);
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+  } finally { database.close(); }
+}
+
 const photoInput = document.getElementById('photos');
 if (photoInput) {
   const form = photoInput.closest('form');
@@ -32,6 +51,11 @@ if (photoInput) {
   const totalLabel = form.querySelector('.upload-total-label');
   const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
   const compression = form.querySelector('[data-compress]');
+  const resumable = form.querySelector('[data-resumable]');
+  const clearSaved = form.querySelector('[data-clear-saved]');
+  const resumeSupported = Boolean(window.indexedDB && crypto.subtle && crypto.getRandomValues);
+  let restoring = false;
+  if (resumeSupported) { form.querySelector('[data-resume-option]').hidden = false; form.querySelector('[data-resume-help]').hidden = false; clearSaved.hidden = false; }
   const enhanced = typeof XMLHttpRequest !== 'undefined' && Boolean(globalThis.crypto?.getRandomValues);
   let items = [];
   let previewUrls = [];
@@ -79,7 +103,9 @@ if (photoInput) {
   }
 
   function updateControls() {
-    photoInput.disabled = busy;
+    photoInput.disabled = busy || restoring;
+    if (resumable) resumable.disabled = busy || restoring || items.some(item => item.uploadFile);
+    if (clearSaved) clearSaved.disabled = busy || restoring;
     if (compression) compression.disabled = busy || items.some(item => item.uploadFile);
     selection.querySelector('.preview-heading .muted').textContent = busy ? 'Keep this page open' : (items.some(item => item.state !== 'ready') ? 'Uploads tracked below' : 'Not uploaded yet');
     selection.querySelector('.selection-help').textContent = busy ? 'Your selection is locked while uploads are running.'
@@ -117,6 +143,10 @@ if (photoInput) {
 
   function removePhoto(item) {
     if (busy || confirmed(item)) return;
+    if (item.resumable) {
+      savedUploadStore('readwrite', store => store.delete(item.key)).catch(() => {});
+      discardRemote(item).catch(() => {});
+    }
     const index = items.indexOf(item);
     const remainingItems = items.filter(entry => entry !== item);
     try {
@@ -215,6 +245,7 @@ if (photoInput) {
   async function preparePhoto(item) {
     if (item.uploadFile) return;
     item.uploadFile = item.file;
+    item.resumable = resumeSupported && resumable.checked;
     if (!compression?.checked || typeof createImageBitmap !== 'function') return;
     let bitmap;
     try {
@@ -234,6 +265,78 @@ if (photoInput) {
       }
     } catch { /* The original remains available if compression is unsupported. */ }
     finally { bitmap?.close(); }
+  }
+
+  async function persistPhoto(item) {
+    if (!item.resumable) return;
+    item.secret ||= [...crypto.getRandomValues(new Uint8Array(32))].map(value => value.toString(16).padStart(2, '0')).join('');
+    try {
+      item.checksum ||= [...new Uint8Array(await crypto.subtle.digest('SHA-256', await item.uploadFile.arrayBuffer()))].map(value => value.toString(16).padStart(2, '0')).join('');
+    } catch {
+      item.resumable = false;
+      item.persistenceWarning = ' Unable to save progress on this device. Keep this page open.';
+      return;
+    }
+    item.savedAt ||= Date.now();
+    try {
+      await savedUploadStore('readwrite', store => store.put({ key: item.key, action: form.action, file: item.uploadFile, secret: item.secret, checksum: item.checksum, savedAt: item.savedAt }));
+      item.saved = true;
+    } catch { item.persistenceWarning = ' Browser storage unavailable: keep this page open.'; }
+  }
+
+  function resumableRequest(item, suffix, body, method = 'POST', offset = 0) {
+    return new Promise(resolve => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(method, `${form.action}/resumable${suffix}`);
+      xhr.responseType = 'json'; xhr.timeout = 180000;
+      xhr.setRequestHeader('Accept', 'application/json');
+      xhr.setRequestHeader('X-CSRF-TOKEN', form.querySelector('[name=_token]').value);
+      xhr.setRequestHeader('X-Upload-Secret', item.secret);
+      if (suffix.endsWith('/chunks')) xhr.upload.onprogress = event => {
+        if (!event.lengthComputable) return;
+        const chunkBytes = Math.min(524288, item.uploadFile.size - offset);
+        item.percent = Math.min(99, Math.floor((offset + chunkBytes * event.loaded / event.total) / item.uploadFile.size * 100));
+        item.message = `Uploading · ${item.percent}%${item.persistenceWarning || ''}`; updateProgress(item);
+      };
+      const failed = () => resolve({ ok: false, retryable: true, message: 'Connection interrupted. Retry to resume from the last saved chunk.' });
+      xhr.onerror = failed; xhr.ontimeout = failed; xhr.onabort = failed;
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300 && xhr.response?.data) {
+          resolve({ ok: true, data: xhr.response.data }); return;
+        }
+        const text = xhr.response?.errors ? Object.values(xhr.response.errors).flat()[0] : xhr.response?.message;
+        const retryable = xhr.status === 409 || xhr.status === 429 || xhr.status >= 500;
+        resolve({ ok: false, retryable, automatic: xhr.status >= 500, retryAt: xhr.status === 429 ? Date.now() + Math.max(1, Number(xhr.getResponseHeader('Retry-After')) || 60) * 1000 : 0,
+          stop: [401, 403, 404, 410, 419].includes(xhr.status), message: text || 'Unable to resume. Reload the upload page or choose the photo again.' });
+      };
+      try { xhr.send(body); } catch { failed(); }
+    });
+  }
+
+  async function discardRemote(item) {
+    if (!item.secret) return;
+    return resumableRequest(item, `/${item.key}`, null, 'DELETE');
+  }
+
+  async function sendResumablePhoto(item) {
+    const metadata = new FormData();
+    Object.entries({ id: item.key, name: item.uploadFile.name, mime: item.uploadFile.type, bytes: item.uploadFile.size, sha256: item.checksum }).forEach(([key, value]) => metadata.append(key, value));
+    let response = await resumableRequest(item, '', metadata);
+    if (!response.ok) return response;
+    if (response.data.result) return { ok: true, result: response.data.result };
+    let offset = response.data.offset;
+    if (!Number.isInteger(offset) || offset < 0 || offset > item.uploadFile.size) return { ok: false, retryable: false, message: 'Invalid saved position. Remove this photo and choose again.' };
+    while (offset < item.uploadFile.size) {
+      const body = new FormData(); body.append('offset', offset); body.append('chunk', item.uploadFile.slice(offset, offset + 524288), 'chunk.bin');
+      response = await resumableRequest(item, `/${item.key}/chunks`, body, 'POST', offset);
+      if (!response.ok) return response;
+      if (response.data.result) return { ok: true, result: response.data.result };
+      if (!Number.isInteger(response.data.offset) || response.data.offset <= offset || response.data.offset > item.uploadFile.size) return { ok: false, retryable: false, message: 'Invalid saved position. Remove this photo and choose again.' };
+      offset = response.data.offset;
+    }
+    item.percent = 100; item.message = 'Sent · confirming with server…'; updateProgress(item);
+    response = await resumableRequest(item, `/${item.key}/finish`, new FormData());
+    return response.ok ? { ok: true, result: response.data } : response;
   }
 
   function sendPhoto(item) {
@@ -301,6 +404,7 @@ if (photoInput) {
       for (let index = 0; index < queue.length; index++) {
         const item = queue[index];
         await preparePhoto(item);
+        await persistPhoto(item);
         item.state = 'uploading';
         item.retryAt = 0;
         let response;
@@ -309,10 +413,12 @@ if (photoInput) {
           item.message = attempt ? 'Connection interrupted · retrying safely…' : 'Uploading · 0%';
           updateProgress(item);
           if (attempt) await new Promise(resolve => setTimeout(resolve, 750));
-          response = await sendPhoto(item);
+          response = item.resumable ? await sendResumablePhoto(item) : await sendPhoto(item);
           if (response.ok || !response.retryable || response.retryAt || response.automatic === false || attempt === 1) break;
         }
+        if (response.ok && (!Number.isInteger(response.result?.uploaded) || !Number.isInteger(response.result?.duplicates) || response.result.uploaded + response.result.duplicates !== 1)) response = { ok: false, retryable: true, message: 'Upload confirmation unavailable. Retry safely.' };
         if (response.ok) {
+          if (item.resumable) await savedUploadStore('readwrite', store => store.delete(item.key)).catch(() => {});
           item.state = response.result.duplicates ? 'duplicate' : 'uploaded';
           item.percent = 100;
           item.message = response.result.duplicates ? 'Already uploaded · no duplicate saved' : (response.result.replayed ? 'Upload confirmed · safely retried' : 'Uploaded');
@@ -343,8 +449,42 @@ if (photoInput) {
     }
   }
 
-  photoInput.addEventListener('change', () => {
+  async function restoreSavedPhotos() {
+    if (!resumeSupported) { restoring = false; updateControls(); return; }
+    try {
+      const records = await savedUploadStore('readonly', store => store.getAll());
+      for (const record of records) {
+        if (record.savedAt < Date.now() - 86400000) await savedUploadStore('readwrite', store => store.delete(record.key));
+      }
+      if (busy || items.length || photoInput.files.length) return;
+      items = records.filter(record => record.action === form.action && record.savedAt >= Date.now() - 86400000).slice(0, 10).map(record => {
+        const file = new File([record.file], record.file.name || 'saved-photo.jpg', { type: record.file.type });
+        return { file, uploadFile: file, key: record.key, secret: record.secret, checksum: record.checksum, savedAt: record.savedAt, resumable: true, saved: true, state: 'failed', percent: 0, message: 'Saved on this device · retry to resume', retryable: true, retryAt: 0, previewError: '' };
+      });
+      if (items.length) {
+        resumable.checked = true;
+        const files = new DataTransfer(); items.forEach(item => files.items.add(item.file)); photoInput.files = files.files;
+        status.textContent = 'Unfinished photos recovered. Use Retry failed photos to continue from saved progress.';
+        renderPreviews();
+      }
+    } catch { form.querySelector('[data-resume-help]').textContent = 'Browser storage is unavailable. Resuming works while this page stays open.'; }
+    finally { restoring = false; updateControls(); }
+  }
+  clearSaved?.addEventListener('click', async () => {
     if (busy) return;
+    try {
+      const records = await savedUploadStore('readonly', store => store.getAll());
+      for (const record of records.filter(record => record.action === form.action)) {
+        discardRemote({ key: record.key, secret: record.secret }).catch(() => {});
+        await savedUploadStore('readwrite', store => store.delete(record.key));
+      }
+      items = []; photoInput.value = ''; renderPreviews(); status.textContent = 'Saved uploads cleared from this device. Server staging expires within 24 hours.';
+    } catch { status.textContent = 'Unable to clear saved uploads. Check your browser storage settings.'; }
+  });
+  restoreSavedPhotos();
+
+  photoInput.addEventListener('change', () => {
+    if (busy || restoring) return;
     items = Array.from(photoInput.files).map(file => ({ file, key: uploadId(), state: 'ready', percent: 0, message: '', retryable: false, retryAt: 0, previewError: '' }));
     status.textContent = '';
     renderPreviews();
@@ -396,7 +536,7 @@ function initializeGallery(gallery) {
     });
     form.addEventListener('submit', event => {
       const count = checks.filter(check => check.checked).length;
-      if (!count || (event.submitter?.value === 'delete' && !window.confirm(`Permanently delete ${count} selected photo${count === 1 ? '' : 's'}? This cannot be undone.`))) {
+      if (!count || (event.submitter?.value === 'delete' && !window.confirm(`Move ${count} selected photo${count === 1 ? '' : 's'} to trash? You can restore them for up to 30 days.`))) {
         event.preventDefault();
       }
     });
@@ -565,4 +705,79 @@ if (exportPanel) {
   window.addEventListener('pagehide', () => { stopped = true; clearTimeout(exportTimer); });
   window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; updateExport(); } });
   exportTimer = setTimeout(updateExport, 1000);
+}
+
+const album = document.querySelector('[data-album]');
+if (album) {
+  const grid = album.querySelector('[data-album-grid]');
+  const dialog = album.querySelector('.album-viewer');
+  const slideImage = dialog.querySelector('[data-slide-image]');
+  const slideStatus = dialog.querySelector('[data-slide-status]');
+  const playButton = dialog.querySelector('[data-slide-play]');
+  const startButton = album.querySelector('[data-slideshow-start]');
+  startButton.hidden = false;
+  const interval = dialog.querySelector('[data-slide-seconds]');
+  let photos = [...grid.querySelectorAll('[data-album-photo]')].map(link => ({ id: Number(link.dataset.albumPhoto), url: link.href }));
+  let active = 0, playing = false, slideTimer, feedTimer, stopped = false, opener;
+  const schedule = () => { clearTimeout(slideTimer); if (playing && dialog.open && photos.length > 1) slideTimer = setTimeout(() => show(active + 1), Number(interval.value) * 1000); };
+  function setPlaying(value) { playing = value; playButton.textContent = playing ? 'Pause' : 'Play'; playButton.setAttribute('aria-pressed', String(playing)); schedule(); }
+  function show(index) {
+    if (!photos.length) { dialog.close(); return; }
+    active = (index + photos.length) % photos.length;
+    slideStatus.textContent = 'Loading photo…'; slideImage.hidden = true;
+    slideImage.onload = () => { slideImage.hidden = false; slideStatus.textContent = ''; };
+    slideImage.onerror = () => { slideStatus.textContent = 'Photo unavailable. It may have been removed. Try Next or refresh the album.'; };
+    slideImage.alt = `Shared photo ${photos[active].id}`;
+    slideImage.src = photos[active].url;
+    dialog.querySelector('[data-slide-count]').textContent = `${active + 1} of ${photos.length}`;
+    schedule();
+  }
+  function open(index, autoplay, trigger) { if (!photos.length) return; opener = trigger; show(index); dialog.showModal(); document.body.classList.add('lightbox-open'); setPlaying(autoplay); }
+  startButton.addEventListener('click', () => open(0, true, startButton));
+  grid.addEventListener('click', event => {
+    const link = event.target.closest('[data-album-photo]');
+    if (!link || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault(); open(photos.findIndex(photo => photo.id === Number(link.dataset.albumPhoto)), false, link);
+  });
+  dialog.querySelector('[data-slide-prev]').addEventListener('click', () => show(active - 1));
+  dialog.querySelector('[data-slide-next]').addEventListener('click', () => show(active + 1));
+  playButton.addEventListener('click', () => setPlaying(!playing)); interval.addEventListener('change', schedule);
+  dialog.querySelector('[data-album-close]').addEventListener('click', () => dialog.close());
+  dialog.querySelector('[data-fullscreen]').addEventListener('click', async () => { try { if (document.fullscreenElement) await document.exitFullscreen(); else await dialog.requestFullscreen(); } catch { slideStatus.textContent = 'Fullscreen is unavailable in this browser.'; } });
+  dialog.addEventListener('keydown', event => { if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') { event.preventDefault(); show(active + (event.key === 'ArrowLeft' ? -1 : 1)); } });
+  dialog.addEventListener('close', () => { setPlaying(false); slideImage.removeAttribute('src'); document.body.classList.remove('lightbox-open'); if (document.fullscreenElement === dialog) document.exitFullscreen().catch(() => {}); if (opener?.isConnected) opener.focus(); else startButton.focus(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) setPlaying(false); });
+  async function refreshAlbum() {
+    if (stopped) return;
+    if (!document.hidden) {
+      try {
+        const response = await fetch(album.dataset.feed, { headers: { Accept: 'application/json' }, cache: 'no-store', signal: AbortSignal.timeout(15000) });
+        if ([404, 410].includes(response.status)) {
+          if (dialog.open) dialog.close(); photos = []; grid.replaceChildren(); startButton.disabled = true;
+          album.querySelector('[data-album-status]').textContent = 'This album link is no longer available.'; stopped = true; return;
+        }
+        if (!response.ok) throw new Error('Album unavailable');
+        const data = await response.json();
+        if (!Array.isArray(data.photos)) throw new Error('Invalid album');
+        const next = data.photos.filter(photo => Number.isInteger(photo.id) && typeof photo.url === 'string' && new URL(photo.url, location.href).origin === location.origin);
+        if (JSON.stringify(next) !== JSON.stringify(photos)) {
+          const currentId = photos[active]?.id;
+          photos = next;
+          grid.replaceChildren();
+          photos.forEach(photo => {
+            const link = document.createElement('a'); link.href = photo.url; link.className = 'album-photo'; link.dataset.albumPhoto = photo.id; link.setAttribute('aria-label', `View shared photo ${photo.id}`);
+            const image = new Image(); image.src = photo.url; image.alt = `Shared photo ${photo.id}`; image.loading = 'lazy'; image.width = 480; image.height = 480; link.append(image); grid.append(link);
+          });
+          if (!photos.length) { const empty = document.createElement('p'); empty.textContent = 'No approved photos yet. Check back soon.'; grid.append(empty); }
+          if (dialog.open) { const index = photos.findIndex(photo => photo.id === currentId); if (index < 0) dialog.close(); else active = index; }
+        }
+        startButton.disabled = !photos.length;
+        album.querySelector('[data-album-status]').textContent = 'Approved previews only · up to date.';
+      } catch { album.querySelector('[data-album-status]').textContent = 'Unable to refresh. Reconnecting; you can also refresh this page.'; }
+    }
+    if (!stopped) feedTimer = setTimeout(refreshAlbum, 5000);
+  }
+  window.addEventListener('pagehide', () => { stopped = true; clearTimeout(feedTimer); setPlaying(false); });
+  window.addEventListener('pageshow', event => { if (event.persisted) { stopped = false; refreshAlbum(); } });
+  feedTimer = setTimeout(refreshAlbum, 3000);
 }

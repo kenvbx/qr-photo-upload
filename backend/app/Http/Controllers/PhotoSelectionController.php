@@ -30,11 +30,11 @@ class PhotoSelectionController extends Controller
 
         $deleted = 0;
         foreach ($photos as $photo) {
-            if ($removal->remove($photo, $request->user()->id)) {
+            if ($removal->trash($photo, $request->user()->id)) {
                 $deleted++;
             }
         }
-        $response = redirect()->route('collections.show', $collection)->with('status', $deleted.' '.($deleted === 1 ? 'photo' : 'photos').' deleted.');
+        $response = redirect()->route('collections.show', $collection)->with('status', $deleted.' '.($deleted === 1 ? 'photo' : 'photos').' moved to trash.');
         if ($deleted !== $photos->count()) {
             $response->withErrors(['photos' => 'Some photos could not be deleted. Refresh the gallery and retry any remaining photos.']);
         }

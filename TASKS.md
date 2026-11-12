@@ -9,7 +9,7 @@
 - [x] Verify MySQL concurrency with real parallel uploads in CI.
 - [ ] Deploy a demo when requested/configured.
 
-Verified locally 2026-11-12: 67 backend tests on SQLite (609 assertions; 5 MySQL-only tests skipped), and 17 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
+Verified locally 2026-11-12: 82 backend tests on SQLite (802 assertions; 6 MySQL-only tests skipped), and 20 Chromium end-to-end tests. GitHub Actions runs the full backend suite on MySQL, including real parallel uploads. Pending: physical phone, public demo deployment and operational restore drill.
 
 - [x] Guest photo previews, filename/size, keyboard-accessible removal, client validation feedback and browser regression coverage.
 
@@ -35,3 +35,11 @@ Verified locally 2026-11-12: 67 backend tests on SQLite (609 assertions; 5 MySQL
 - [x] Hashed QR password, rate limiting and grant revocation.
 - [x] Private per-photo local/S3/R2 storage, streamed cloud ZIP staging and configuration examples.
 - [ ] Connect real S3/R2 credentials and run provider smoke tests when supplied.
+
+
+- [x] Optional persisted 512 KiB resumable uploads, crash offset reconciliation, checksum validation, expiry cleanup and real reload/lost-completion browser regression.
+- [x] Owner trash/restore/purge, quota/deduplication accounting, deadline pruning and stale-purge protection.
+- [x] Pending/approved/rejected review and collection-scoped bulk moderation.
+- [x] Opt-in expiring/rotatable shared preview albums, live updates and accessible slideshow.
+- [x] Event logo re-encoding, welcome text, adjustable colors/contrast and page-only redirect history.
+- [x] Add real concurrent MySQL resumable finish regression; verify its CI result before claiming it passed.

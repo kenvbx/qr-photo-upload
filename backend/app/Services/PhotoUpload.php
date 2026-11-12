@@ -42,7 +42,7 @@ class PhotoUpload
                 }
                 abort_unless($locked->active(), 410, 'This upload link has expired or closed.');
                 $this->hashLegacyPhotos($locked);
-                $existing = $locked->photos()->whereIn('sha256', array_column($entries, 'sha256'))->pluck('sha256')->flip()->all();
+                $existing = $locked->photos()->withTrashed()->whereIn('sha256', array_column($entries, 'sha256'))->pluck('sha256')->flip()->all();
                 $new = [];
                 foreach ($entries as $entry) {
                     if (! array_key_exists($entry['sha256'], $existing)) {
@@ -50,10 +50,10 @@ class PhotoUpload
                         $existing[$entry['sha256']] = true;
                     }
                 }
-                if ($locked->photos()->count() + count($new) > 100) {
+                if ($locked->photos()->withTrashed()->count() + count($new) > 100) {
                     throw ValidationException::withMessages(['photos' => 'This collection can hold up to 100 photos.']);
                 }
-                if ($locked->photos()->sum('bytes') + array_sum(array_map(fn ($entry) => $entry['file']->getSize(), $new)) > $locked->quota_bytes) {
+                if ($locked->photos()->withTrashed()->sum('bytes') + array_sum(array_map(fn ($entry) => $entry['file']->getSize(), $new)) > $locked->quota_bytes) {
                     throw ValidationException::withMessages(['photos' => 'This collection has reached its storage quota.']);
                 }
                 foreach ($new as $entry) {
@@ -111,7 +111,7 @@ class PhotoUpload
 
     private function hashLegacyPhotos(UploadSession $session): void
     {
-        foreach ($session->photos()->whereNull('sha256')->get() as $photo) {
+        foreach ($session->photos()->withTrashed()->whereNull('sha256')->get() as $photo) {
             $stream = Storage::disk($photo->disk)->readStream($photo->path);
             if (! is_resource($stream)) {
                 continue;
@@ -125,7 +125,7 @@ class PhotoUpload
             } finally {
                 fclose($stream);
             }
-            if (! $session->photos()->where('sha256', $hash)->exists()) {
+            if (! $session->photos()->withTrashed()->where('sha256', $hash)->exists()) {
                 $photo->update(['sha256' => $hash]);
             }
         }

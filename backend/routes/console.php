@@ -47,3 +47,5 @@ Artisan::command('demo:seed', function () {
 Schedule::command('exports:prune')->hourly()->withoutOverlapping();
 
 Schedule::command('photos:prune')->hourly()->withoutOverlapping();
+
+Schedule::command('uploads:prune')->hourly()->withoutOverlapping();

@@ -10,9 +10,11 @@
             <button class="text-button" type="button" data-clear-selection hidden>Clear selection</button>
             <button class="secondary" name="action" value="download" data-bulk-action>Download ZIP</button>
             <button class="secondary danger" name="action" value="delete" data-bulk-action>Delete selected</button>
+            <button class="secondary" formaction="{{ route('photos.moderate',$collection) }}" name="decision" value="approved" data-bulk-action>Approve selected</button>
+            <button class="secondary" formaction="{{ route('photos.moderate',$collection) }}" name="decision" value="rejected" data-bulk-action>Reject selected</button>
         </div>
         <p class="gallery-scope muted">Select up to 24 photos on this page. Selection resets when you change pages.</p>
-        <noscript><p class="hint">Use the checkboxes to select photos. Deletion is permanent.</p></noscript>
+        <noscript><p class="hint">Use the checkboxes to select photos. Deleted photos move to trash for up to 30 days.</p></noscript>
     </form>
     @endif
     @if($exports->count())
@@ -28,8 +30,8 @@
                 </a>
                 <label class="gallery-photo-select"><input type="checkbox" name="photos[]" value="{{ $photo->id }}" form="photo-selection" aria-label="Select photo {{ $photo->id }}"><span class="sr-only">Select photo {{ $photo->id }}</span></label>
             </div>
-            <div class="photo-info"><strong>Photo {{ $photo->id }}</strong><span class="photo-filename">{{ $photo->original_name }}</span>@if($photo->delete_after)<span>Auto-delete {{ $photo->delete_after->format('M j, Y H:i') }} UTC</span>@endif
-@if($photo->thumbnail_status !== 'ready')<p class="thumbnail-status muted">{{ $photo->thumbnail_status === 'failed' ? 'Preview unavailable. Original available.' : 'Preview processing. Updates automatically.' }}</p>@endif<span>{{ number_format($photo->bytes/1024/1024,2) }} MB · {{ $photo->width }} × {{ $photo->height }}</span><div class="photo-actions"><a class="text-button" href="{{ route('photos.show',[$photo,'download'=>1]) }}">Download</a><form method="post" action="{{ route('photos.destroy',$photo) }}" data-confirm="Permanently delete this photo?">@csrf @method('DELETE')<button class="text-button danger">Delete</button></form></div></div>
+            <div class="photo-info"><strong>Photo {{ $photo->id }}</strong><span class="badge">{{ $photo->moderation_status === 'pending' ? 'Needs review' : ucfirst($photo->moderation_status) }}</span><span class="photo-filename">{{ $photo->original_name }}</span>@if($photo->delete_after)<span>Auto-delete {{ $photo->delete_after->format('M j, Y H:i') }} UTC</span>@endif
+@if($photo->thumbnail_status !== 'ready')<p class="thumbnail-status muted">{{ $photo->thumbnail_status === 'failed' ? 'Preview unavailable. Original available.' : 'Preview processing. Updates automatically.' }}</p>@endif<span>{{ number_format($photo->bytes/1024/1024,2) }} MB · {{ $photo->width }} × {{ $photo->height }}</span><div class="photo-actions"><a class="text-button" href="{{ route('photos.show',[$photo,'download'=>1]) }}">Download</a><form method="post" action="{{ route('photos.destroy',$photo) }}" data-confirm="Move this photo to trash? You can restore it for up to 30 days.">@csrf @method('DELETE')<button class="text-button danger">Delete</button></form></div></div>
         </article>
     @empty
         <div class="empty"><div class="empty-icon" aria-hidden="true">↗</div><h3>Ready for the first photo</h3><p>Share the QR code with your guests. Their photos appear here automatically.</p></div>

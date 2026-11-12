@@ -1,0 +1,6 @@
+@extends('layout')
+@section('title','Trash')
+@section('content')
+<nav class="crumb"><a href="{{ route('collections.show',$collection) }}">{{ $collection->title }}</a><span>/</span>Trash</nav><h1>Trash</h1><p class="lead">Restore photos within 30 days. An earlier photo retention deadline still applies.</p><p class="hint">Trashed photos are hidden from the gallery, shared album and ZIP downloads. They still count toward storage and the 100-photo limit. Restored photos need approval again.</p>
+<section class="panel task-section">@forelse($photos as $photo)<article class="task-row"><div><strong>Photo {{ $photo->id }}</strong><span>{{ $photo->original_name }}</span><span>Trashed {{ $photo->deleted_at->format('M j, Y H:i') }} UTC</span></div><div class="photo-actions"><form method="post" action="{{ route('trash.restore',$photo->id) }}">@csrf<button class="secondary">Restore photo {{ $photo->id }}</button></form><form method="post" action="{{ route('trash.purge',$photo->id) }}" data-confirm="Permanently delete this photo? This cannot be undone.">@csrf @method('DELETE')<button class="secondary danger">Delete permanently</button></form></div></article>@empty<p>Trash is empty.</p>@endforelse{{ $photos->links() }}</section>
+@endsection

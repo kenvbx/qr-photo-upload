@@ -422,7 +422,7 @@ test('mobile gallery selects all, downloads ZIP and confirms only selected delet
  });
  await page.getByRole('button', { name: 'Delete selected' }).click();
  await expect(page.locator('.photo-card')).toHaveCount(1);
- await expect(page.getByRole('status').filter({ hasText: '2 photos deleted.' })).toBeVisible();
+ await expect(page.getByRole('status').filter({ hasText: '2 photos moved to trash.' })).toBeVisible();
  await expect(page.locator('[data-selection-count]')).toHaveText('0 selected');
 });
 
@@ -621,4 +621,92 @@ test('organizer can protect QR upload with a password and revoke guest access', 
  await guest.reload();
  await expect(guest.getByRole('heading', { name: 'Private upload link' })).toBeVisible();
  await context.close();
+});
+
+
+test('saved upload resumes after page reload without resending accepted chunks or duplicating a lost finish response', async ({ page, browser }) => {
+ test.setTimeout(60000);
+ const url = await createPreviewCollection(page, 'Resumable journey'); const collectionUrl = page.url();
+ const context = await browser.newContext(); const guest = await context.newPage(); const errors = []; guest.on('pageerror', error => errors.push(error.message));
+ await guest.goto(url);
+ const image = new PNG({ width: 900, height: 700 }); let seed = 173;
+ for (let i = 0; i < image.data.length; i += 4) { seed = (Math.imul(seed,1664525)+1013904223) >>> 0; image.data[i] = seed & 255; image.data[i+1] = seed >>> 8 & 255; image.data[i+2] = seed >>> 16 & 255; image.data[i+3] = 255; }
+ const bytes = PNG.sync.write(image); expect(bytes.length).toBeGreaterThan(1048576);
+ await guest.locator('input[type=file]').setInputFiles({ name: 'resume-me.png', mimeType: 'image/png', buffer: bytes });
+ await guest.locator('[data-resumable]').check();
+ const initialOffsets = [];
+ await guest.route('**/resumable/*/chunks', async route => {
+  const offset = Number(route.request().postDataBuffer().toString('latin1').match(/name="offset"\r\n\r\n(\d+)/)[1]); initialOffsets.push(offset);
+  if (offset >= 524288) await route.abort('internetdisconnected'); else await route.continue();
+ });
+ await guest.getByRole('button', { name: 'Upload photos' }).click();
+ await expect(guest.locator('.upload-status')).toContainText('1 failed', { timeout: 15000 });
+ expect(initialOffsets.filter(offset => offset === 0)).toHaveLength(1);
+ await guest.screenshot({ path: 'screenshots/resumable-upload-desktop.png', fullPage: true });
+ await guest.unroute('**/resumable/*/chunks'); await guest.reload();
+ await expect(guest.locator('.upload-status')).toContainText('Unfinished photos recovered');
+ const resumedOffsets = []; let lostFinish = false;
+ await guest.route('**/resumable/*/chunks', async route => {
+  resumedOffsets.push(Number(route.request().postDataBuffer().toString('latin1').match(/name="offset"\r\n\r\n(\d+)/)[1])); await route.continue();
+ });
+ await guest.route('**/resumable/*/finish', async route => {
+  if (!lostFinish) { lostFinish = true; const response = await route.fetch(); expect(response.ok()).toBe(true); await route.abort('failed'); }
+  else await route.continue();
+ });
+ await guest.getByRole('button', { name: 'Retry failed photos' }).click();
+ await expect(guest.locator('.upload-status')).toContainText('Thank you', { timeout: 15000 });
+ expect(resumedOffsets[0]).toBe(524288); expect(resumedOffsets).not.toContain(0); expect(lostFinish).toBe(true);
+ await page.goto(collectionUrl); await expect(page.locator('.photo-card')).toHaveCount(1);
+ const response = await page.request.get(await page.locator('[data-lightbox-photo]').getAttribute('href')); expect((await response.body()).equals(bytes)).toBe(true);
+ await guest.reload(); await expect(guest.locator('.upload-selection')).toBeHidden(); expect(errors).toEqual([]); await context.close();
+});
+
+test('event branding, moderation, public album and slideshow honor approval and revoked links', async ({ page, browser }) => {
+ test.setTimeout(60000); const errors = []; page.on('pageerror', error => errors.push(error.message));
+ await galleryWithPhotos(page, browser, 'A branded celebration');
+ const guestUrl = await page.getByLabel('Guest upload link').inputValue();
+ await page.getByLabel('Welcome message').fill('Welcome to our shared celebration.');
+ await page.getByLabel('Event color', { exact: true }).fill('#fff000');
+ await page.getByLabel('Event logo', { exact: true }).setInputFiles(previewImage('brand-logo.png'));
+ await page.getByLabel('Enable shared album', { exact: true }).check();
+ await page.getByRole('button', { name: 'Save event settings' }).click();
+ const albumUrl = await page.getByLabel('Shared album link').inputValue();
+ const context = await browser.newContext({ viewport: { width: 390, height: 844 } }); const viewer = await context.newPage(); viewer.on('pageerror', error => errors.push(error.message));
+ await viewer.goto(guestUrl); await expect(viewer.getByAltText('Event logo')).toBeVisible(); await expect(viewer.locator('.lead')).toHaveText('Welcome to our shared celebration.');
+ expect(await viewer.locator('.primary').evaluate(button => getComputedStyle(button).backgroundColor)).toBe('rgb(255, 240, 0)');
+ expect(await viewer.locator('.primary').evaluate(button => getComputedStyle(button).color)).toBe('rgb(0, 0, 0)');
+ await viewer.goto(albumUrl); await expect(viewer.locator('[data-album-photo]')).toHaveCount(0);
+ await page.locator('[data-select-all]').check(); await page.getByRole('button', { name: 'Approve selected' }).click();
+ await expect(page.locator('.photo-info .badge').first()).toHaveText('Approved');
+ await expect(viewer.locator('[data-album-photo]')).toHaveCount(3, { timeout: 15000 });
+ expect(await viewer.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+ await expect.poll(() => viewer.locator('[data-album-photo] img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
+ await viewer.screenshot({ path: 'screenshots/shared-album-mobile.png', fullPage: true });
+ await viewer.getByRole('button', { name: 'Start slideshow' }).click();
+ await expect(viewer.locator('[data-slide-image]')).toBeVisible(); await expect(viewer.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+ await viewer.getByRole('button', { name: 'Pause', exact: true }).click(); await expect(viewer.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
+ await viewer.keyboard.press('ArrowRight'); await expect(viewer.locator('[data-slide-count]')).toHaveText('2 of 3');
+ await expect(viewer.locator('[data-slide-status]')).toHaveText('');
+ await expect.poll(() => viewer.locator('[data-slide-image]').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+ await viewer.screenshot({ path: 'screenshots/slideshow-mobile.png' });
+ await viewer.keyboard.press('Escape'); await expect(viewer.locator('dialog')).not.toBeVisible();
+ await page.locator('[data-select-all]').check(); await page.getByRole('button', { name: 'Reject selected' }).click();
+ await expect(viewer.locator('[data-album-photo]')).toHaveCount(0, { timeout: 15000 });
+ await page.getByLabel('Replace album link (revoke the old link)').check(); await page.getByRole('button', { name: 'Save event settings' }).click();
+ expect((await viewer.request.get(albumUrl)).status()).toBe(404); expect(errors).toEqual([]); await context.close();
+});
+
+test('trash restores a photo for review and permanent deletion removes it', async ({ page, browser }) => {
+ await galleryWithPhotos(page, browser, 'Recoverable moments');
+ const card = page.locator('.photo-card').first(); const id = await card.getAttribute('data-photo-id');
+ page.once('dialog', dialog => dialog.accept()); await card.getByRole('button', { name: 'Delete', exact: true }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(2); await page.getByRole('link', { name: /Open trash/ }).click();
+ await expect(page.getByRole('button', { name: `Restore photo ${id}`, exact: true })).toBeVisible();
+ await page.screenshot({ path: 'screenshots/trash-desktop.png', fullPage: true });
+ await page.getByRole('button', { name: `Restore photo ${id}`, exact: true }).click();
+ await page.getByRole('link', { name: 'Recoverable moments', exact: true }).click();
+ await expect(page.locator('.photo-card')).toHaveCount(3); await expect(page.locator(`[data-photo-id="${id}"] .badge`)).toHaveText('Needs review');
+ page.once('dialog', dialog => dialog.accept()); await page.locator(`[data-photo-id="${id}"]`).getByRole('button', { name: 'Delete', exact: true }).click();
+ await page.getByRole('link', { name: /Open trash/ }).click(); page.once('dialog', dialog => dialog.accept());
+ await page.getByRole('button', { name: 'Delete permanently', exact: true }).click(); await expect(page.getByText('Trash is empty.', { exact: true })).toBeVisible();
 });

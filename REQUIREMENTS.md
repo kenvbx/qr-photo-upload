@@ -38,3 +38,12 @@ Malware scanning, retention/cleanup scheduling, monitoring alerts, resumable upl
 5. Hashed QR password gates guest views/upload/replay, limits attempts and invalidates grants after password changes.
 6. Owner search by filename/ID, MIME filtering and allowlisted date/size sorting preserve pagination/filter state.
 7. Private local/S3/R2 photo disks coexist, use authorized streamed access and support queued thumbnails/ZIPs/removal; provider secrets/configuration supplied later.
+
+
+## Event workflow upgrade acceptance criteria
+
+- Optional IndexedDB persistence restores exact prepared bytes after reload; server-confirmed 512 KiB chunks resume without duplicate writes, mismatches fail, image/checksum/quota validation precedes acceptance, and repeated/concurrent completion produces one receipt/photo/job.
+- Trash provides owner-only restore/purge, excludes photos from owner/public/ZIP access, includes them in quotas/deduplication, and safely prunes at 30 days or an earlier retention deadline. Restoration returns pending review.
+- Owner bulk review is collection-scoped, allowlisted and audited. Pending/rejected/trashed/unready photos are never public.
+- Public albums are opt-in, use separate expiring/rotatable bearer links, serve only sanitized ready JPEG previews and support manual fallback plus accessible responsive current-page slideshow/live updates. Every media endpoint honors revoke/expiry.
+- Bounded logo upload, escaped welcome text and validated colors customize guest/album views; button contrast adjusts automatically.

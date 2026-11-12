@@ -179,6 +179,7 @@ class UploadReliabilityTest extends TestCase
         $this->send($c, $bytes, $key)->assertOk();
         $photo = $c->photos()->firstOrFail();
         $this->actingAs(User::findOrFail($c->user_id))->delete('/photos/'.$photo->id)->assertRedirect();
+        $this->delete(route('trash.purge', $photo->id))->assertRedirect();
         $this->send($c, $bytes, $key)->assertOk()->assertJsonPath('data.replayed', true);
         $this->assertDatabaseCount('photos', 0);
         $this->assertEmpty(Storage::disk('local')->allFiles());
